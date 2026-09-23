@@ -1,5 +1,6 @@
 import math
 import random
+from math import e, pi
 
 def primitive_roots(q):
     candidates = range(1, q)
@@ -32,6 +33,13 @@ def legendre(a, q):
     if p == q - 1: return -1
     return 1
 
+def G(q):
+    total = 0
+    for i in range(1, q):
+        total += legendre(i, q) * e ** (i * 2j * math.pi / q)
+    return total
+    
+
 q = int(input("Input an odd prime:"))
 assert all(q%i for i in range(2, int(q**(1/2)) + 1)) and q > 2, "q is not an odd prime"
 
@@ -51,3 +59,4 @@ if q % 4 == 3:
 if q % 4 == 1:
     s = sum(math.log(2*math.sin(math.pi*i/q)) * legendre(i, q) for i in range(1, q))
     print(f"True value: {-s / q**(1/2)}")
+print("Gauss sum G(1) mod q:", G(q), "≈", (1 + 1j ** (-q)) / (1 + 1j ** (-1)) * q ** 0.5)
