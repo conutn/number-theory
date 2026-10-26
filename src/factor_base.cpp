@@ -1,0 +1,100 @@
+// factor bases (rational, algebraic incl. projective roots, quadratic characters), bound heuristics, norms
+
+#include "factor_base.hpp"
+#include "numtheory.hpp"
+#include "polymod.hpp"
+
+uint64_t choose_bound(const bigint& n)
+{
+	// fitted to measurements (degree-3 runs, 12..32 digit semiprimes, A = max(10000, 4*bound)):
+	//   smallest bound that yields enough relations: 12-16 digits ~800, 20: ~3200, 24: ~6400, 28: ~12800, 32: ~25600
+	//   fastest runs are at or one doubling above that threshold; time then grows quickly with the bound
+	// ln(bound) = 0.87 * (ln n)^(1/3) (ln ln n)^(2/3) + 0.7 follows the L[1/3] shape.  The offset puts the result
+	// slightly above the threshold; main() doubles the bound if that is still too small.
+	// NOT measured beyond ~32 digits: treat larger values as a starting point
+	const double ln = (double)(msb(n) + 1) * 0.693147;
+	const double lnln = std::log(ln);
+	const double b = std::exp(0.87 * std::cbrt(ln) * std::pow(lnln, 2.0 / 3.0) + 0.7);
+
+	return (uint64_t)std::min(std::max(b, 200.0), 4.0e9);
+}
+
+size_t choose_num_qc(const bigint& n)
+{
+	return 20 + msb(n) / 8;
+}
+
+factor_bases make_factor_bases(const poly& f, const bigint& m, uint64_t rat_bound, uint64_t alg_bound, size_t num_qc)
+{
+	factor_bases fb;
+ 
+	for (uint64_t p : gen_prime(rat_bound))
+		fb.rational.push_back({ p, (m % p).convert_to<uint64_t>() });
+ 
+	const bigint lc = f.data().back();
+	fb.parity = (lc != 1);
+ 
+	for (uint64_t p : gen_prime(alg_bound))
+	{
+		const bigint P = p;
+ 
+		if (reduce(f, P).data().empty())
+			throw runtime_error("make_factor_bases: " + to_string(p) + " divides every coefficient of f, so it divides n");
+ 
+		if (lc % P == 0) fb.algebraic.push_back({ p, FB_PROJECTIVE });
+ 
+		for (const bigint& r : roots(f, P))
+			fb.algebraic.push_back({ p, r.convert_to<uint64_t>() });
+	}
+ 
+	bigint q = std::max<uint64_t>(std::max(rat_bound, alg_bound), 2);
+	const bigint give_up = q + 100000000;
+ 
+	while (fb.quadratic.size() < num_qc)
+	{
+		if (++q > give_up) throw runtime_error("make_factor_bases: could not find enough quadratic-character primes");
+		if (!miller_rabin_test(q, 25)) continue;
+ 
+		const poly fq = reduce(f, q);
+		if (fq.size() != f.size()) continue; // q | lc(f)
+		const poly dq = derivative(fq, q);
+ 
+		for (const bigint& s : roots(f, q))
+		{
+			if (fb.quadratic.size() >= num_qc) break;
+			if (eval_mod(dq, s, q) == 0) continue; // repeated root
+			fb.quadratic.push_back({ q.convert_to<uint64_t>(), s.convert_to<uint64_t>() });
+		}
+	}
+ 
+	return fb;
+}
+
+bigint norm(poly f, bigint a, bigint b)
+{
+	vector<bigint> a_pow(f.size()), b_pow(f.size());
+	a_pow[0] = 1, b_pow[b_pow.size() - 1] = 1;
+
+	for (size_t i = 1; i < a_pow.size(); ++i)
+	{
+		a_pow[i] = a_pow[i - 1] * a;
+		b_pow[b_pow.size() - i - 1] = b_pow[b_pow.size() - i] * b;
+	}
+
+	bigint res = 0;
+
+	for (size_t n = 0; n < f.size(); ++n)
+	{
+		bigint x = f[n] * a_pow[n] * b_pow[n];
+
+		if ((f.size() + n) & 1)	res += x;
+		else res -= x;
+	}
+
+	return res;
+}
+
+size_t num_columns(const factor_bases& fb)
+{
+	return 1 + fb.rational.size() + fb.algebraic.size() + fb.quadratic.size() + (fb.parity ? 1 : 0);
+}
