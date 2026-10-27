@@ -1,5 +1,14 @@
 // relation finding: line sieve on both sides, candidate factoring (trial or re-sieve), quadratic characters,
 // single large prime per side (partial relations combined through cycles in the large-prime graph)
+//
+// line sieve over a in [-A,A] for b = 1,2,3...
+// two arrays per b:
+//  rational:  starts at log|a+bm|~log(b*m), a prime p | a+b*m subtracts log(p)
+//  algebraic: starts at log|N(a+b*theta)| (evaluated in double), (p,r) with a+b*r=0 (mod p) subtracts log(p)
+// candidates: residual log below slack (+ log of the large-prime bound, if enabled) on BOTH sides
+// those are checked precisely afterwards: rational factorization, algebraic norm factorization, quadratic characters
+// a cofactor that is a single prime <= lp_bound on one or both sides gives a partial relation (-> partials)
+// relations with no large prime go straight to out. call combine_partials(partials, out) when done
 
 #include "sieve.hpp"
 #include "numtheory.hpp"
@@ -8,15 +17,18 @@
 #include <algorithm>
 #include <cstring>
 
-// ---------------------------------------------------------------------------------------------
-// cofactor handling
-// after dividing out every factor-base prime, v is either 1, or a product of primes > B.
-// if v <= lp_bound <= B^2 it must be a single prime: accept it as a large prime.
+// returns true if the cofactor v is 1 or a single large prime <= lp_bound, sets lp to it (0 if v = 1)
+// after dividing out every factor-base prime v is either 1 or a product of primes > B,
+// so if v <= lp_bound <= B^2 it must be a single prime
 static bool take_cofactor(const bigint& v, uint64_t lp_bound, uint64_t& lp)
 {
 	lp = 0;
 	if (v == 1) return true;
-	if (lp_bound && v <= bigint(lp_bound)) { lp = v.convert_to<uint64_t>(); return true; }
+	if (lp_bound && v <= bigint(lp_bound))
+	{
+		lp = v.convert_to<uint64_t>();
+		return true;
+	}
 	return false;
 }
 
@@ -25,7 +37,11 @@ static bool take_cofactor(const bigint& v, uint64_t lp_bound, uint64_t& lp)
 static bool factor_rational(int64_t a, int64_t b, const bigint& m, const factor_bases& fb, uint64_t lp_bound, uint64_t& lp, vector<uint32_t>& cols, vector<fac_entry>& fac)
 {
 	bigint v = bigint(a) + bigint(b) * m;
-	if (v < 0) { cols.push_back(0); v = -v; }
+	if (v < 0)
+	{
+		cols.push_back(0);
+		v = -v;
+	}
 
 	for (size_t i = 0; i < fb.rational.size(); ++i)
 	{
@@ -34,7 +50,11 @@ static bool factor_rational(int64_t a, int64_t b, const bigint& m, const factor_
 
 		const bigint P = p;
 		unsigned e = 0;
-		while (v % P == 0) { v /= P; ++e; }
+		while (v % P == 0)
+		{
+			v /= P;
+			++e;
+		}
 		if (e) fac.push_back({ uint32_t(i), e });
 		if (e & 1) cols.push_back(uint32_t(1 + i));
 	}
@@ -58,7 +78,11 @@ static bool factor_algebraic(const poly& f, int64_t a, int64_t b, const factor_b
 
 		const bigint P = p;
 		unsigned e = 0;
-		while (N % P == 0) { N /= P; ++e; }
+		while (N % P == 0)
+		{
+			N /= P;
+			++e;
+		}
 		if (e) fac.push_back({ uint32_t(i), e });
 		if (e & 1) cols.push_back(uint32_t(offset + i));
 	}
@@ -70,13 +94,21 @@ static bool factor_algebraic(const poly& f, int64_t a, int64_t b, const factor_b
 static bool factor_rational_hits(int64_t a, int64_t b, const bigint& m, const factor_bases& fb, const vector<uint32_t>& hits, uint64_t lp_bound, uint64_t& lp, vector<uint32_t>& cols, vector<fac_entry>& fac)
 {
 	bigint v = bigint(a) + bigint(b) * m;
-	if (v < 0) { cols.push_back(0); v = -v; }
+	if (v < 0)
+	{
+		cols.push_back(0);
+		v = -v;
+	}
 
 	for (uint32_t i : hits)
 	{
 		const bigint P = fb.rational[i].p;
 		unsigned e = 0;
-		while (v % P == 0) { v /= P; ++e; }
+		while (v % P == 0)
+		{
+			v /= P;
+			++e;
+		}
 		if (e) fac.push_back({ i, e });
 		if (e & 1) cols.push_back(uint32_t(1 + i));
 	}
@@ -93,7 +125,11 @@ static bool factor_algebraic_hits(const poly& f, int64_t a, int64_t b, const fac
 	{
 		const bigint P = fb.algebraic[i].p;
 		unsigned e = 0;
-		while (N % P == 0) { N /= P; ++e; }
+		while (N % P == 0)
+		{
+			N /= P;
+			++e;
+		}
 		if (e) fac.push_back({ i, e });
 		if (e & 1) cols.push_back(uint32_t(offset + i));
 	}
@@ -116,45 +152,52 @@ static bool quadratic_chars(int64_t a, int64_t b, const factor_bases& fb, size_t
 	return true;
 }
 
-// ---------------------------------------------------------------------------------------------
-// large-prime helpers
+static uint64_t mulmod_u64(uint64_t a, uint64_t b, uint64_t m)
+{
+	return (uint64_t)((unsigned __int128)a * b % m);
+}
 
-static uint64_t mulmod_u64(uint64_t a, uint64_t b, uint64_t m) { return (uint64_t)((unsigned __int128)a * b % m); }
-
-// inverse of a mod prime p (a != 0 mod p), extended Euclid
+// returns inverse of a mod prime p (a != 0 mod p), extended Euclid
 static uint64_t inv_mod_u64(uint64_t a, uint64_t p)
 {
 	__int128 r0 = p, r1 = a % p, t0 = 0, t1 = 1;
 	while (r1 != 0)
 	{
 		const __int128 q = r0 / r1;
-		const __int128 r2 = r0 - q * r1; r0 = r1; r1 = r2;
-		const __int128 t2 = t0 - q * t1; t0 = t1; t1 = t2;
+		const __int128 r2 = r0 - q * r1;
+		r0 = r1;
+		r1 = r2;
+		const __int128 t2 = t0 - q * t1;
+		t0 = t1;
+		t1 = t2;
 	}
 	if (t0 < 0) t0 += p;
 	return (uint64_t)t0;
 }
 
-// root of the algebraic ideal of degree 1 above p dividing a+b*theta: r = -a/b mod p.  false if p | b.
+// sets r to the root of the degree 1 algebraic ideal above p dividing a+b*theta: r = -a/b mod p
+// returns false if p | b
 static bool alg_root(int64_t a, int64_t b, uint64_t p, uint64_t& r)
 {
 	const uint64_t bm = uint64_t(b) % p;
 	if (bm == 0) return false;
-	int64_t am = a % (int64_t)p; if (am < 0) am += (int64_t)p;
+	int64_t am = a % (int64_t)p;
+	if (am < 0) am += (int64_t)p;
 	r = (p - mulmod_u64((uint64_t)am, inv_mod_u64(bm, p), p)) % p;
 	return true;
 }
 
-// graph: vertex 0 = "no large prime"; every other vertex is a rational prime p or an algebraic ideal (p,r).
-// a partial relation is an edge between its two vertices.
+// large-prime graph: vertex 0 = "no large prime", every other vertex is a rational prime p or an algebraic ideal (p,r)
+// a partial relation is an edge between its two vertices
 struct lp_graph
 {
-	std::map<std::tuple<int, uint64_t, uint64_t>, uint32_t> id;
+	std::map<std::tuple<int, uint64_t, uint64_t>, uint32_t> id; // (side, p, r) -> vertex
 	vector<std::array<uint32_t, 2>> edges;
 
 	explicit lp_graph(const vector<nfs_relation>& rels)
 	{
-		auto vid = [&](int side, uint64_t p, uint64_t r) -> uint32_t {
+		auto vid = [&](int side, uint64_t p, uint64_t r) -> uint32_t
+		{
 			if (p == 0) return 0;
 			auto it = id.find({ side, p, r });
 			if (it != id.end()) return it->second;
@@ -165,10 +208,23 @@ struct lp_graph
 		for (const nfs_relation& x : rels)
 			edges.push_back({ vid(0, x.lp_r, 0), vid(1, x.lp_a, x.lp_a_root) });
 	}
-	size_t nvert() const { return id.size() + 1; }
+
+	size_t nvert() const
+	{
+		return id.size() + 1;
+	}
 };
 
-static uint32_t uf_find(vector<uint32_t>& p, uint32_t x) { while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; } return x; }
+// union-find with path halving
+static uint32_t uf_find(vector<uint32_t>& p, uint32_t x)
+{
+	while (p[x] != x)
+	{
+		p[x] = p[p[x]];
+		x = p[x];
+	}
+	return x;
+}
 
 // number of independent cycles = number of full relations obtainable by combining the partials
 size_t count_lp_cycles(const vector<nfs_relation>& partials)
@@ -181,7 +237,8 @@ size_t count_lp_cycles(const vector<nfs_relation>& partials)
 	for (const auto& e : g.edges)
 	{
 		const uint32_t u = uf_find(uf, e[0]), v = uf_find(uf, e[1]);
-		if (u == v) ++cycles; else uf[u] = v;
+		if (u == v) ++cycles; // edge closes a cycle
+		else uf[u] = v;
 	}
 	return cycles;
 }
@@ -194,11 +251,15 @@ void combine_partials(const vector<nfs_relation>& partials, vector<nfs_relation>
 	const size_t V = g.nvert(), E = g.edges.size();
 
 	vector<vector<uint32_t>> adj(V); // edge indices
-	for (size_t e = 0; e < E; ++e) { adj[g.edges[e][0]].push_back((uint32_t)e); adj[g.edges[e][1]].push_back((uint32_t)e); }
+	for (size_t e = 0; e < E; ++e)
+	{
+		adj[g.edges[e][0]].push_back((uint32_t)e);
+		adj[g.edges[e][1]].push_back((uint32_t)e);
+	}
 
 	const uint32_t NONE = UINT32_MAX;
-	vector<uint32_t> pv(V, NONE), pe(V, NONE), depth(V, 0);
-	vector<char> seen(V, 0), tree(E, 0);
+	vector<uint32_t> pv(V, NONE), pe(V, NONE), depth(V, 0); // parent vertex, parent edge and depth in the spanning forest
+	vector<char> seen(V, 0), tree(E, 0); // tree[e] = edge is in the forest
 
 	for (uint32_t root = 0; root < V; ++root) // BFS spanning forest
 	{
@@ -212,12 +273,17 @@ void combine_partials(const vector<nfs_relation>& partials, vector<nfs_relation>
 			{
 				const uint32_t v = g.edges[e][0] == u ? g.edges[e][1] : g.edges[e][0];
 				if (seen[v]) continue;
-				seen[v] = 1; pv[v] = u; pe[v] = e; depth[v] = depth[u] + 1; tree[e] = 1;
+				seen[v] = 1;
+				pv[v] = u;
+				pe[v] = e;
+				depth[v] = depth[u] + 1;
+				tree[e] = 1;
 				q.push_back(v);
 			}
 		}
 	}
 
+	// every non-tree edge closes a cycle: the edge plus the tree paths from its ends up to their common ancestor
 	for (size_t e0 = 0; e0 < E; ++e0)
 	{
 		if (tree[e0]) continue;
@@ -225,8 +291,16 @@ void combine_partials(const vector<nfs_relation>& partials, vector<nfs_relation>
 		uint32_t u = g.edges[e0][0], v = g.edges[e0][1];
 		while (u != v)
 		{
-			if (depth[u] >= depth[v]) { used.push_back(pe[u]); u = pv[u]; }
-			else                      { used.push_back(pe[v]); v = pv[v]; }
+			if (depth[u] >= depth[v])
+			{
+				used.push_back(pe[u]);
+				u = pv[u];
+			}
+			else
+			{
+				used.push_back(pe[v]);
+				v = pv[v];
+			}
 		}
 
 		nfs_relation c;
@@ -248,25 +322,14 @@ void combine_partials(const vector<nfs_relation>& partials, vector<nfs_relation>
 	}
 }
 
-// ---------------------------------------------------------------------------------------------
-// line sieve over a in [-A,A] for b = 1,2,3...
-// two arrays per b:
-//  rational:  starts at log|a+bm|~log(b*m); a prime p | a+b*m subtracts log(p)
-//  algebraic: starts at log|N(a+b*theta)| (evaluated in double); (p,r) with a+b*r=0 (mod p) subtracts log(p)
-// candidates: residual log below slack (+ log of the large-prime bound, if enabled) on BOTH sides.
-// those candidates are checked precisely afterwards:
-// rational factorization, algebraic norm factorization, quadratic characters.
-// a cofactor that is a single prime <= lp_bound on one or both sides gives a partial relation (-> partials);
-// relations with no large prime go straight to out.  Call combine_partials(partials, out) when done.
-
-// approximate ln(x) for x >= 1, no libm, no division, no branch:  x = 2^e * (1+t), t in [0,1),
-// log2(1+t) ~ t (1.3465 - 0.3465 t)  (measured max error 0.005 in ln).
+// approximate ln(x) for x >= 1, no libm, no division, no branch
+// x = 2^e * (1+t), t in [0,1), log2(1+t) ~ t (1.3465 - 0.3465 t) (measured max error 0.005 in ln)
 static inline double fast_ln(double x)
 {
 	uint64_t bits;
 	std::memcpy(&bits, &x, sizeof bits);
-	const int e = int((bits >> 52) & 0x7ff) - 1023;
-	bits = (bits & 0x000fffffffffffffULL) | 0x3ff0000000000000ULL;
+	const int e = int((bits >> 52) & 0x7ff) - 1023; // exponent
+	bits = (bits & 0x000fffffffffffffULL) | 0x3ff0000000000000ULL; // mantissa with exponent 0: 1+t
 	double m;
 	std::memcpy(&m, &bits, sizeof m);
 	const double t = m - 1.0;
@@ -288,19 +351,25 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 
 	// large prime bounds per side, clamped to B^2 so that any cofactor <= bound is automatically prime
 	uint64_t Br = fb.rational.back().p, Ba = 0;
-	for (const fb_pair& e : fb.algebraic) if (e.r != FB_PROJECTIVE) Ba = std::max<uint64_t>(Ba, e.p);
+	for (const fb_pair& e : fb.algebraic)
+		if (e.r != FB_PROJECTIVE) Ba = std::max<uint64_t>(Ba, e.p);
 	uint64_t lpr = 0, lpa = 0;
 	if (sp.lp_bound)
 	{
 		lpr = std::min<uint64_t>(sp.lp_bound, Br * Br);
 		lpa = std::min<uint64_t>(sp.lp_bound, Ba * Ba);
-		if (lpr <= Br) lpr = 0;
+		if (lpr <= Br) lpr = 0; // nothing above the base: no large primes on this side
 		if (lpa <= Ba) lpa = 0;
 	}
-	const float rthr = sp.slack  + (lpr ? (float)std::log((double)lpr) : 0.f);
+	const float rthr = sp.slack + (lpr ? (float)std::log((double)lpr) : 0.f); // candidate thresholds on the residual logs
 	const float athr = sp.aslack + (lpa ? (float)std::log((double)lpa) : 0.f);
 
-	struct entry { uint64_t pk, p, r; float lg; uint32_t idx; };
+	struct entry
+	{
+		uint64_t pk, p, r; // prime power, prime, m mod pk
+		float lg; // log p
+		uint32_t idx; // index of p in fb.rational
+	};
 	vector<entry> ents; // rational primes and prime powers that fit in the interval
 	for (size_t i = 0; i < fb.rational.size(); ++i)
 	{
@@ -311,10 +380,20 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 			ents.push_back({ pk, e.p, (m % bigint(pk)).convert_to<uint64_t>(), lg, uint32_t(i) });
 	}
 
-	struct aentry { uint64_t p, r; float lg; uint32_t idx; };
+	struct aentry
+	{
+		uint64_t p, r;
+		float lg;
+		uint32_t idx; // index in fb.algebraic
+	};
 	vector<aentry> aents; // algebraic degree-1 primes
-	struct pentry { uint64_t p; float lg; uint32_t idx; };
-	vector<pentry> projs; // p | lc(f): the root at infinity.  p | F(a,b) for ALL a in the lines with p | b
+	struct pentry
+	{
+		uint64_t p;
+		float lg;
+		uint32_t idx;
+	};
+	vector<pentry> projs; // p | lc(f): the root at infinity. p | F(a,b) for ALL a in the lines with p | b
 	for (size_t i = 0; i < fb.algebraic.size(); ++i)
 	{
 		const fb_pair& e = fb.algebraic[i];
@@ -322,26 +401,27 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 		else aents.push_back({ e.p, e.r, (float)std::log((double)e.p), uint32_t(i) });
 	}
 
-	// cost model (very rough, in "memory steps")
+	// cost model (very rough, in "memory steps"): re-sieving the candidates against the whole base vs testing each base prime
 	double resieve_cost = 0;
-	for (const entry& e : ents) if (e.pk == e.p) resieve_cost += (double)len / (double)e.p + 2;
+	for (const entry& e : ents)
+		if (e.pk == e.p) resieve_cost += (double)len / (double)e.p + 2;
 	for (const aentry& e : aents) resieve_cost += (double)len / (double)e.p + 2;
 	const double test_cost_per_cand = 4.0 * (double)(fb.rational.size() + fb.algebraic.size());
 
-	vector<double> fc(d + 1);
+	vector<double> fc(d + 1); // f as doubles, for the norm estimate
 	for (size_t k = 0; k <= d; ++k) fc[k] = f[k].convert_to<double>();
 
-	const size_t alg_off  = 1 + fb.rational.size();
+	const size_t alg_off = 1 + fb.rational.size(); // first column of each block
 	const size_t quad_off = alg_off + fb.algebraic.size();
 	const double logm = log_cpp(m);
 
-	vector<float> s(len), sa(len);
+	vector<float> s(len), sa(len); // sieve arrays, rational and algebraic
 	vector<double> bp(d + 1);
 	size_t ncand = 0;
 	vector<uint32_t> cands;
-	vector<uint64_t> bitmap;
-	vector<uint32_t> slot;
-	vector<vector<uint32_t>> hit_r, hit_a;
+	vector<uint64_t> bitmap; // re-sieve: marks candidate positions
+	vector<uint32_t> slot; // re-sieve: position -> index in cands
+	vector<vector<uint32_t>> hit_r, hit_a; // re-sieve: base primes dividing each candidate
 
 	size_t cycles = count_lp_cycles(partials);
 
@@ -349,8 +429,9 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 	for (; b <= b_max && out.size() + cycles < sp.target; ++b)
 	{
 		std::fill(s.begin(), s.end(), (float)(std::log((double)b) + logm));
-		float proj_lg = 0;
-		for (const pentry& e : projs) if (b % e.p == 0) proj_lg += e.lg;
+		float proj_lg = 0; // projective primes dividing b divide every norm of the line
+		for (const pentry& e : projs)
+			if (b % e.p == 0) proj_lg += e.lg;
 
 		// log|N(a+b*theta)| = log|sum f_k (-a)^k (-b)^(d-k)|
 		bp[0] = 1;
@@ -396,10 +477,19 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 		const bool resieve = !cands.empty() &&
 			(sp.cand_mode == 2 || (sp.cand_mode == 0 && (double)cands.size() * test_cost_per_cand > resieve_cost));
 
+		// re-sieve: run the primes over the line again and record which candidates they hit
 		if (resieve)
 		{
-			if (bitmap.size() != (len + 63) / 64) { bitmap.assign((len + 63) / 64, 0); slot.assign(len, 0); }
-			if (hit_r.size() < cands.size()) { hit_r.resize(cands.size()); hit_a.resize(cands.size()); }
+			if (bitmap.size() != (len + 63) / 64)
+			{
+				bitmap.assign((len + 63) / 64, 0);
+				slot.assign(len, 0);
+			}
+			if (hit_r.size() < cands.size())
+			{
+				hit_r.resize(cands.size());
+				hit_a.resize(cands.size());
+			}
 			for (size_t k = 0; k < cands.size(); ++k)
 			{
 				bitmap[cands[k] >> 6] |= uint64_t(1) << (cands[k] & 63);
@@ -426,8 +516,9 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 			if (proj_lg > 0) // the projective primes dividing b divide every candidate of the line
 				for (size_t k = 0; k < cands.size(); ++k)
 				{
-					for (const pentry& e : projs) if (b % e.p == 0) hit_a[k].push_back(e.idx);
-					std::sort(hit_a[k].begin(), hit_a[k].end());
+					for (const pentry& e : projs)
+						if (b % e.p == 0) hit_a[k].push_back(e.idx);
+					std::sort(hit_a[k].begin(), hit_a[k].end()); // factor_*_hits wants ascending indices
 				}
 
 			for (uint32_t pos : cands) bitmap[pos >> 6] = 0;
@@ -459,7 +550,7 @@ void find_relations(const poly& f, const bigint& m, const factor_bases& fb, siev
 			if (la && !alg_root(a, rel.b, la, rel.lp_a_root)) continue; // p | b: not a usable ideal
 
 			if (lr || la) partials.push_back(std::move(rel));
-			else          out.push_back(std::move(rel));
+			else out.push_back(std::move(rel));
 		}
 
 		if (b % 100 == 0 && !partials.empty()) cycles = count_lp_cycles(partials);

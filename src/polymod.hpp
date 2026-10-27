@@ -3,10 +3,10 @@
 
 #include "common.hpp"
 
-// put coefficients in [0, p), remove leading zeros 
+// put coefficients in [0, p), remove leading zeros
 poly reduce(poly a, const bigint& p);
 
-// gcd(a,b) in F_p[x], returns monic polynomial 
+// gcd(a,b) in F_p[x], returns monic polynomial
 poly poly_gcd(poly a, poly b, const bigint& p);
 
 // a*b mod (f, p)
@@ -22,7 +22,7 @@ vector<bigint> roots(const poly& f, const bigint& p);
 // b^e mod (f, p)
 // requires:
 //  b reduced
-//  f reduce & monic & deg>=1
+//  f reduced & monic & deg>=1
 poly pow_mod(const poly& b, const bigint& e, const poly& f, const bigint& p);
 
 // derivative over F_p
@@ -50,7 +50,9 @@ irred is_irreducible(const poly& f0, size_t num_primes = 30);
 // f(x) mod p
 bigint eval_mod(const poly& f, const bigint& x, const bigint& p);
 
-// f(x) = sum c_j x^j with lc = c_d.  alpha = lc * theta is an algebraic integer with the MONIC minimal polynomial
+// monic version of f(x) = sum c_j x^j, lc = c_d
+// alpha = lc*theta is an algebraic integer with the monic minimal polynomial
 //   fhat(x) = lc^(d-1) f(x/lc) = x^d + sum_{j<d} c_j lc^(d-1-j) x^j
-// (lc = 1: fhat = f).  Relations a+b*theta become lc*a + b*alpha in Z[alpha]; theta -> m corresponds to alpha -> lc*m
+// (lc = 1: fhat = f)
+// relations a+b*theta become lc*a + b*alpha in Z[alpha]; theta -> m corresponds to alpha -> lc*m
 poly monic_transform(const poly& f);

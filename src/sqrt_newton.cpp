@@ -4,7 +4,7 @@
 #include "numtheory.hpp"
 #include "polymod.hpp"
 
-// a mod f over Z
+// reduces a mod f over Z in place
 // requires:
 //  f monic
 static void rem_monic_z(poly& a, const poly& f)
@@ -17,13 +17,13 @@ static void rem_monic_z(poly& a, const poly& f)
 	{
 		const size_t shift = A.size() - nb;
 		const bigint mm = A.back();
-		for (size_t i = 0; i + 1 < nb; ++i) A[shift + i] -= mm * B[i];
+		for (size_t i = 0; i + 1 < nb; ++i) A[shift + i] -= mm * B[i]; // subtract mm*x^shift*f, the top term cancels
 		A.pop_back();
-		a.normalize();
+		a.normalize(); // lower terms may have become zero
 	}
 }
 
-// a*b mod f over Z
+// returns a*b mod f over Z
 static poly mul_z(const poly& a, const poly& b, const poly& f)
 {
 	const auto& A = a.data();
@@ -41,9 +41,12 @@ static poly mul_z(const poly& a, const poly& b, const poly& f)
 	return r;
 }
 
-static bool is_one(const poly& a) { return a.size() == 1 && a[0] == 1; }
+static bool is_one(const poly& a)
+{
+	return a.size() == 1 && a[0] == 1;
+}
 
-// sqrt in F_p[x]/f
+// sets root = sqrt(g) in F_p[x]/f (Tonelli-Shanks)
 // requires:
 //  f irred mod p
 //  g nonzero
@@ -51,13 +54,17 @@ static bool is_one(const poly& a) { return a.size() == 1 && a[0] == 1; }
 static bool field_sqrt(const poly& g, const poly& f, const bigint& p, poly& root)
 {
 	const size_t d = f.size() - 1;
-	const bigint qm1 = pow(p, (unsigned)d) - 1;
+	const bigint qm1 = pow(p, (unsigned)d) - 1; // q-1, q = p^d
 
-	if (!is_one(pow_mod(g, qm1 / 2, f, p))) return false;
+	if (!is_one(pow_mod(g, qm1 / 2, f, p))) return false; // euler criterion
 
-	bigint t = qm1;
+	bigint t = qm1; // q-1 = t * 2^s, t odd
 	unsigned s = 0;
-	while ((t & 1) == 0) { t >>= 1; ++s; }
+	while ((t & 1) == 0)
+	{
+		t >>= 1;
+		++s;
+	}
 
 	poly z;
 	for (bigint c = 0;; ++c) // z=x+c: find non-residue
@@ -72,12 +79,18 @@ static bool field_sqrt(const poly& g, const poly& f, const bigint& p, poly& root
 
 	while (!is_one(tt))
 	{
+		// least i with tt^(2^i) = 1
 		unsigned i = 0;
 		poly x = tt;
-		while (!is_one(x)) { x = mul_mod(x, x, f, p); ++i; if (i >= mm) return false; }
+		while (!is_one(x))
+		{
+			x = mul_mod(x, x, f, p);
+			++i;
+			if (i >= mm) return false;
+		}
 
 		poly b = c;
-		for (unsigned j = 0; j + i + 1 < mm; ++j) b = mul_mod(b, b, f, p);
+		for (unsigned j = 0; j + i + 1 < mm; ++j) b = mul_mod(b, b, f, p); // c^(2^(mm-i-1))
 
 		r = mul_mod(r, b, f, p);
 		c = mul_mod(b, b, f, p);
@@ -89,7 +102,7 @@ static bool field_sqrt(const poly& g, const poly& f, const bigint& p, poly& root
 	return true;
 }
 
-// beta with beta^2=g in Z[x]/f
+// sets beta with beta^2 = g in Z[x]/f
 // returns false if g is not square
 static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
 {
@@ -97,13 +110,14 @@ static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
 	bigint p = 1000;
 	poly r;
 
-	for (int tries = 0;; )
+	// find a prime with f irreducible mod p and g a square mod p
+	for (int tries = 0;;)
 	{
 		do ++p; while (!miller_rabin_test(p, 25));
 		if (++tries > 500) throw runtime_error("poly_sqrt: no prime with f irreducible found");
 
 		const poly fp = reduce(f, p);
-		if (poly_gcd(fp, derivative(fp, p), p).size() != 1) continue;
+		if (poly_gcd(fp, derivative(fp, p), p).size() != 1) continue; // f must be squarefree mod p
 		const vector<size_t> degs = factor_degrees(fp, p);
 		if (degs.size() != 1 || degs[0] != d) continue;
 
@@ -116,28 +130,29 @@ static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
 
 	// z = r^-1 = g^(-1/2) mod p
 	poly z = pow_mod(r, pow(p, (unsigned)d) - 2, reduce(f, p), p);
-	bigint M = p;
+	bigint M = p; // z is correct mod M, the precision doubles every step
 
 	for (int step = 0; step < 40; ++step)
 	{
 		// candidate beta = g z (symmetric residues mod M)
 		beta = mul_mod(reduce(g, M), z, f, M);
-		for (bigint& c : beta.data()) if (c > M / 2) c -= M;
+		for (bigint& c : beta.data())
+			if (c > M / 2) c -= M;
 		beta.normalize();
 		if (mul_z(beta, beta, f).data() == g.data()) return true;
 
-		// lift to M^2
+		// lift to M^2: z <- z (3 - g z^2) / 2
 		const bigint M2 = M * M;
 		const poly gM = reduce(g, M2);
 		poly t = mul_mod(gM, mul_mod(z, z, f, M2), f, M2); // g z^2
-		vector<bigint> u(std::max<size_t>(t.size(), 1));
+		vector<bigint> u(std::max<size_t>(t.size(), 1)); // u = 3 - t
 		for (size_t i = 0; i < t.size(); ++i) u[i] = modp(-t[i], M2);
 		u[0] = modp(u[0] + 3, M2);
 		poly up(std::move(u));
 		up.normalize();
 
 		z = mul_mod(z, up, f, M2);
-		const bigint half = (M2 + 1) / 2;
+		const bigint half = (M2 + 1) / 2; // 1/2 mod M2 (M2 odd)
 		for (bigint& c : z.data()) c = c * half % M2;
 		M = M2;
 	}
@@ -153,15 +168,16 @@ bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t
 	const poly f = monic_transform(f0); // work in Z[alpha], alpha = lc*theta
 	vector<bigint> dv;
 	for (size_t i = 1; i < f.size(); ++i) dv.push_back(f[i] * i);
-	const poly fd(dv);
+	const poly fd(dv); // f'
 
+	// gamma = f'^2 prod(lc*a + b*alpha), R = prod(a + b*m) on the rational side
 	poly g = mul_z(fd, fd, f);
 	bigint R = 1;
 
 	for (size_t idx : dep)
 	{
 		const nfs_relation& r = rels[idx];
-		g = mul_z(g, poly{ lc * bigint(r.a), bigint(r.b) }, f); // lc*a + b*alpha
+		g = mul_z(g, poly{ lc * bigint(r.a), bigint(r.b) }, f);
 		R *= bigint(r.a) + bigint(r.b) * m;
 	}
 
@@ -172,6 +188,7 @@ bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t
 	poly beta;
 	if (!poly_sqrt(g, f, beta)) return false;
 
+	// x = beta(lc*m), y = f'(lc*m) * lc^(k/2) * sqrt(R)   (mod n)
 	const bigint lcm = lc * m % n;
 	bigint x = 0, fdm = 0;
 	for (size_t i = beta.size(); i-- > 0;) x = modp(x * lcm + beta[i] % n, n);
@@ -182,7 +199,11 @@ bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t
 	for (const bigint& c : { modp(x - y, n), modp(x + y, n) })
 	{
 		const bigint d = boost::multiprecision::gcd(c, n);
-		if (d > 1 && d < n) { factor = d; return true; }
+		if (d > 1 && d < n)
+		{
+			factor = d;
+			return true;
+		}
 	}
 
 	return false;
