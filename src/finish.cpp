@@ -37,7 +37,7 @@ int main(int argc, char** argv)
 		if (acc != 0) { cerr << "f(m) != 0 mod n: the polynomial was not restored correctly\n"; return 2; }
 	}
 
-	const factor_bases fb = make_factor_bases(f, m, S.bound, S.bound, choose_num_qc(n));
+	const factor_bases fb = make_factor_bases(n, f, m, S.bound, S.bound, choose_num_qc(n));
 	cerr << "factor bases: " << fb.rational.size() << " / " << fb.algebraic.size() << " / " << fb.quadratic.size() << '\n';
 
 	// same construction as in main.cpp
@@ -67,10 +67,10 @@ int main(int argc, char** argv)
 		return out;
 	};
 
-	std::ifstream in(argv[2]);
+	ifstream in(argv[2]);
 	if (!in) { cerr << "cannot read " << argv[2] << '\n'; return 2; }
 	vector<vector<size_t>> deps;
-	for (string line; std::getline(in, line);)
+	for (string line; getline(in, line);)
 	{
 		istringstream is(line);
 		vector<size_t> d;
@@ -81,10 +81,10 @@ int main(int argc, char** argv)
 			d.push_back(x);
 		}
 		d = expand(d);
-		if (!d.empty()) deps.push_back(std::move(d)); // empty = everything cancelled
+		if (!d.empty()) deps.push_back(move(d)); // empty = everything cancelled
 	}
-	std::sort(deps.begin(), deps.end());
-	deps.erase(std::unique(deps.begin(), deps.end()), deps.end());
+	sort(deps.begin(), deps.end());
+	deps.erase(unique(deps.begin(), deps.end()), deps.end());
 	cerr << deps.size() << " distinct dependencies\n";
 
 	for (size_t k = 0; k < deps.size(); ++k)

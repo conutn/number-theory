@@ -2,6 +2,7 @@
 // common includes, namespaces, and basic types
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -12,13 +13,17 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <tuple>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #include <boost/multiprecision/cpp_int.hpp>
@@ -34,11 +39,15 @@ using namespace boost::math;
 using namespace boost::math::tools;
 using namespace std;
 
+using std::swap;
+using std::min;
+using std::max;
+
 // mpz_int is much faster than cpp_int
 #ifdef GNFS_NO_GMP
-typedef boost::multiprecision::cpp_int bigint;
+typedef cpp_int bigint;
 #else
-typedef boost::multiprecision::mpz_int bigint;
+typedef mpz_int bigint;
 #endif
 typedef polynomial<bigint> poly;
 

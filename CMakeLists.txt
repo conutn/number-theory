@@ -17,6 +17,7 @@ endif()
 option(GNFS_USE_GMP "Use GMP for big integers" ON)
 
 find_package(Boost REQUIRED)
+find_package(Threads REQUIRED)
 
 # suppress false warning
 add_compile_options(
@@ -34,12 +35,12 @@ add_library(gnfs_core STATIC
   src/polymod.cpp
   src/sieve.cpp
   src/sqrt.cpp
-  src/sqrt_couveignes.cpp
   src/sqrt_newton.cpp
   src/state.cpp
 )
 
 target_include_directories(gnfs_core PUBLIC src ${Boost_INCLUDE_DIRS})
+target_link_libraries(gnfs_core PRIVATE Threads::Threads)
 
 if(NOT CMAKE_VERSION VERSION_LESS 3.16)
   target_precompile_headers(gnfs_core PRIVATE src/common.hpp)

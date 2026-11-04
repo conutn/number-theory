@@ -1,4 +1,4 @@
-// small number theory helpers: modular arithmetic, 64-bit mulmod/powmod, Jacobi symbol, integer roots, prime generation
+// number theory helpers: modular arithmetic, 64-bit mulmod/powmod, Jacobi symbol, integer roots, prime generation
 
 #include "numtheory.hpp"
 
@@ -14,15 +14,15 @@ bigint modp(const bigint& x, const bigint& p)
 // throws domain_error if gcd(a,p) != 1
 bigint inv_mod(const bigint& a, const bigint& p)
 {
-	bigint r0 = p, r1 = modp(a, p), t0 = 0, t1 = 1; // invariant: r_i = t_i * a (mod p)
+	bigint r0 = p, r1 = modp(a, p), t0 = 0, t1 = 1; // r_i = t_i * a (mod p)
 
 	while (r1 != 0)
 	{
 		bigint q = r0 / r1;
 		bigint r2 = r0 - q * r1;
 		bigint t2 = t0 - q * t1;
-		r0 = std::move(r1); r1 = std::move(r2);
-		t0 = std::move(t1); t1 = std::move(t2);
+		r0 = move(r1); r1 = move(r2);
+		t0 = move(t1); t1 = move(t2);
 	}
 
 	if (r0 != 1) throw domain_error("inv_mod: element not invertible"); // r0 = gcd(a,p)
@@ -45,20 +45,19 @@ bigint iroot(const bigint& n, unsigned d)
 	return lo;
 }
 
-// log of x>0
-// works for x too large to fit in a double
+// log x
 double log_cpp(const bigint& x)
 {
 	const size_t bits = msb(x) + 1;
-	if (bits <= 900) return std::log(x.convert_to<double>()); // double overflows near 2^1024
+	if (bits <= 900) return log(x.convert_to<double>()); // double overflows near 2^1024
 	const size_t sh = bits - 800;
-	return std::log((x >> sh).convert_to<double>()) + double(sh) * 0.6931471805599453; // log(x) ~ log(x >> sh) + sh*log(2)
+	return log((x >> sh).convert_to<double>()) + double(sh) * 0.6931471805599453; // log(x) ~ log(x >> sh) + sh*log(2)
 }
 
 // a+b*r mod p
 // requires:
-//  b>=0
-//  p<2^32
+//   b>=0
+//   p<2^32
 uint64_t lin_mod(int64_t a, uint64_t b, uint64_t p, uint64_t r)
 {
 	int64_t am = a % (int64_t)p;
@@ -68,8 +67,8 @@ uint64_t lin_mod(int64_t a, uint64_t b, uint64_t p, uint64_t r)
 
 // Jacobi symbol (a/n)
 // requires:
-//  n odd & positive
-// note: equal to Legendre symbol if n is prime
+//   n odd & positive
+// equal to Legendre symbol if n is prime
 int jacobi(uint64_t a, uint64_t n)
 {
 	int res = 1;

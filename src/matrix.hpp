@@ -10,7 +10,7 @@ typedef vector<uint64_t> bitvec; // word i of a block vector holds entry i of 64
 struct sparse_matrix
 {
 	size_t nrows = 0, ncols = 0;
-	vector<vector<uint32_t>> rows; // columns with a 1 in each row
+	vector<vector<uint32_t>> rows; // columns w/ 1 in each row
 };
 
 // one row per relation
@@ -22,12 +22,9 @@ struct filtered_matrix
 	vector<size_t> row_map; // row of B -> index into rels
 };
 
-// build the matrix without rows that cannot be in any dependency
-// singleton removal: a column that occurs in exactly one row forces that row out of every dependency,
-// so drop the row, repeat (removing a row can create new singletons). Empty columns are dropped and the rest renumbered
-// without this the matrix is very rank deficient (hundreds of unused columns), V^T A V in Lanczos has tiny rank and the iteration crawls
-// if keep_excess >= 0, surplus rows are also dropped (heaviest first, then singleton removal again) until rows - columns <= keep_excess
-// block Lanczos is designed for only a few dozen more rows than columns; with thousands of surplus rows A=BB^T has a huge kernel and it did not converge
+// build matrix w/o rows that cannot be in any dependency
+// singleton removal: column occuring in exactly one row removes row
+// surplus rows are dropped (heaviest first then singleton removal) until rows - columns <= keep_excess
 filtered_matrix filter_matrix(const vector<nfs_relation>& rels, size_t ncols, long keep_excess = -1);
 
 // symmetric operator A=BB^T (nrows x nrows)

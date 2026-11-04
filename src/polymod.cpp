@@ -1,4 +1,4 @@
-// polynomials over Z and F_p: gcd, powers mod f, roots and factorization degrees mod p, irreducibility test
+// polynomials over Z and F_p: gcd, powers mod f, roots and fact'n degrees mod p, irred. test
 
 #include "polymod.hpp"
 #include "numtheory.hpp"
@@ -21,10 +21,10 @@ static void make_monic(poly& a, const bigint& p)
 	for (bigint& c : A) c = c * inv % p;
 }
 
-// a%=b over F_p
+// a %= b over F_p
 // requires:
-//  a reduced
-//  b reduced & monic
+//   a reduced
+//   b reduced & monic
 static void rem_monic(poly& a, const poly& b, const bigint& p)
 {
 	auto& A = a.data();
@@ -36,21 +36,21 @@ static void rem_monic(poly& a, const poly& b, const bigint& p)
 	while (A.size() >= nb)
 	{
 		const size_t shift = A.size() - nb;
-		const bigint m = A.back(); // subtract m*x^shift*b, cancels the leading term
+		const bigint m = A.back(); // subtract m*x^shift*b, cancels leading term
 
-		for (size_t i = 0; i + 1 < nb; ++i) // leading coefficient of b is 1, skipped
+		for (size_t i = 0; i + 1 < nb; ++i) // lc(b) is 1, no scaling
 			A[shift + i] = modp(A[shift + i] - m * B[i], p);
 
 		A.pop_back();
-		a.normalize(); // new leading coefficients may be zero
+		a.normalize(); // new lc(s) may be zero
 	}
 }
 
-// gcd(a,b) in F_p[x], returns monic polynomial
+// gcd(a,b) in F_p[x], return monic polynomial
 poly poly_gcd(poly a, poly b, const bigint& p)
 {
-	a = reduce(std::move(a), p);
-	b = reduce(std::move(b), p);
+	a = reduce(move(a), p);
+	b = reduce(move(b), p);
 
 	while (!b.data().empty())
 	{
@@ -63,11 +63,11 @@ poly poly_gcd(poly a, poly b, const bigint& p)
 	return a;
 }
 
-// a*b mod (f, p)
+// ab mod (f, p)
 // requires:
-//  a reduced
-//  b reduced
-//  f reduced & monic & deg>=1
+//   a reduced
+//   b reduced
+//   f reduced & monic & deg >= 1
 poly mul_mod(const poly& a, const poly& b, const poly& f, const bigint& p)
 {
 	const auto& A = a.data();
@@ -77,9 +77,9 @@ poly mul_mod(const poly& a, const poly& b, const poly& f, const bigint& p)
 	vector<bigint> c(A.size() + B.size() - 1);
 	for (size_t i = 0; i < A.size(); ++i)
 		for (size_t j = 0; j < B.size(); ++j)
-			c[i + j] += A[i] * B[j]; // reduce mod p only once at the end
+			c[i + j] += A[i] * B[j]; // reduce mod p only at end
 
-	poly r(std::move(c));
+	poly r(move(c));
 	for (bigint& x : r.data()) x %= p;
 	r.normalize();
 	rem_monic(r, f, p);
@@ -88,19 +88,19 @@ poly mul_mod(const poly& a, const poly& b, const poly& f, const bigint& p)
 
 // x^e mod (f, p)
 // requires:
-//  f reduced & monic & deg>=1
+//   f reduced & monic & deg >= 1
 static poly x_pow_mod(const bigint& e, const poly& f, const bigint& p)
 {
 	poly r{ 1 };
 	if (e == 0) return r;
 
-	for (int i = (int)msb(e); i >= 0; --i) // square and multiply, from the top bit
+	for (int i = (int)msb(e); i >= 0; --i) // square and multiply from top bit
 	{
 		r = mul_mod(r, r, f, p);
 
 		if (bit_test(e, i) && !r.data().empty())
 		{
-			r.data().insert(r.data().begin(), bigint(0)); // multiply by x, cheaper than a full mul_mod
+			r.data().insert(r.data().begin(), bigint(0)); // multiply by x
 			rem_monic(r, f, p);
 		}
 	}
@@ -110,7 +110,7 @@ static poly x_pow_mod(const bigint& e, const poly& f, const bigint& p)
 
 // a(x-s) over F_p
 // requires:
-//  a reduced
+//   a reduced
 static poly poly_shift(const poly& a, const bigint& s, const bigint& p)
 {
 	poly g(a);
@@ -120,7 +120,7 @@ static poly poly_shift(const poly& a, const bigint& s, const bigint& p)
 
 	const bigint t = modp(-s, p);
 
-	for (size_t i = 0; i + 1 < n; ++i) // repeated synthetic division by (x-t) (taylor shift)
+	for (size_t i = 0; i + 1 < n; ++i) // repeated synthetic division by x-t (taylor shift)
 		for (size_t j = n - 1; j > i; --j)
 			c[j - 1] = modp(c[j - 1] + t * c[j], p);
 
@@ -129,7 +129,7 @@ static poly poly_shift(const poly& a, const bigint& s, const bigint& p)
 
 // append to out roots of a
 // requires:
-//  a monic & squarefree & splits completely into linear factors
+//   a monic & squarefree & splits completely into linear factors
 static void split_roots(const poly& a, const bigint& p, vector<bigint>& out)
 {
 	if (a.size() <= 1) return;
@@ -142,13 +142,13 @@ static void split_roots(const poly& a, const bigint& p, vector<bigint>& out)
 
 	const bigint power = (p - 1) / 2;
 
-	// cantor-zassenhaus, offsets tried in order instead of random ones
+	// cantor-zassenhaus, offsets tried in order
 	for (bigint offset = 0; offset < p; ++offset)
 	{
-		poly g = poly_shift(a, offset, p); // roots of g are the roots of a, plus offset
+		poly g = poly_shift(a, offset, p); // roots of g = roots of a + offset
 		vector<bigint> local;
 
-		if (g[0] == 0) // 0 is a root of g, x^power is 0 there
+		if (g[0] == 0) // g(0) = 0, x^power is 0 there
 		{
 			local.push_back(0);
 			g.data().erase(g.data().begin()); // divide by x
@@ -157,7 +157,7 @@ static void split_roots(const poly& a, const bigint& p, vector<bigint>& out)
 		else
 		{
 			const poly r = x_pow_mod(power, g, p);
-			if (r.size() <= 1) continue; // x^power constant, all roots on the same side, no split
+			if (r.size() <= 1) continue; // x^power constant, all roots on same side, no split
 
 			poly plus(r), minus(r);
 			plus.data()[0]  = modp(r[0] + 1, p);
@@ -175,7 +175,7 @@ static void split_roots(const poly& a, const bigint& p, vector<bigint>& out)
 	throw logic_error("split_roots: polynomial does not split over F_p");
 }
 
-// distinct solutions of f(x)=0 (mod p)
+// distinct solutions of f(x) = 0 (mod p)
 vector<bigint> roots(const poly& f, const bigint& p)
 {
 	if (p == 2)
@@ -190,7 +190,7 @@ vector<bigint> roots(const poly& f, const bigint& p)
 
 	poly a = reduce(f, p);
 
-	if (a.data().empty()) throw domain_error("roots: f is identically 0 mod p");
+	if (a.data().empty()) throw domain_error("roots: f is identically 0 mod p: " + to_string(p) + " divides n");
 	if (a.size() == 1) return {};
 
 	make_monic(a, p);
@@ -199,7 +199,7 @@ vector<bigint> roots(const poly& f, const bigint& p)
 	{
 		auto& H = h.data();
 		if (H.size() < 2) H.resize(2, 0);
-		H[1] = modp(H[1] - 1, p); // h = x^p - x mod a
+		H[1] = modp(H[1] - 1, p); // h = x^p-x mod a
 		h.normalize();
 	}
 
@@ -235,7 +235,7 @@ poly derivative(const poly& f, const bigint& p)
 {
 	vector<bigint> d;
 	for (size_t i = 1; i < f.size(); ++i) d.push_back(f[i] * i % p);
-	return poly(std::move(d));
+	return poly(move(d));
 }
 
 // degrees of irreducible factors of f over F_p
@@ -323,9 +323,9 @@ bigint eval_mod(const poly& f, const bigint& x, const bigint& p)
 }
 
 // monic version of f(x) = sum c_j x^j, lc = c_d
-// alpha = lc*theta is an algebraic integer with the monic minimal polynomial
+// alpha = lc*theta is an algebraic integer with monic minimal polynomial
 //   fhat(x) = lc^(d-1) f(x/lc) = x^d + sum_{j<d} c_j lc^(d-1-j) x^j
-// (lc = 1: fhat = f)
+// (lc = 1 => fhat = f)
 // relations a+b*theta become lc*a + b*alpha in Z[alpha]; theta -> m corresponds to alpha -> lc*m
 poly monic_transform(const poly& f)
 {
@@ -340,5 +340,5 @@ poly monic_transform(const poly& f)
 		c[j] = f[j] * pw;
 		pw *= lc;
 	}
-	return poly(std::move(c));
+	return poly(move(c));
 }

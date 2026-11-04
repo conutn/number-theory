@@ -11,30 +11,29 @@
 #include "lanczos.hpp"
 #include "sqrt_newton.hpp"
 #include "crt_tree.hpp"
-#include "sqrt_couveignes.hpp"
 #include "sqrt.hpp"
 #include "planner.hpp"
 #include "dump.hpp"
 #include "state.hpp"
 
 // prints a progress line on stderr: [wall clock | total elapsed | since previous stamp] msg
-static void stamp(const std::string& msg)
+static void stamp(const string& msg)
 {
-	using clock = std::chrono::steady_clock;
+	using clock = chrono::steady_clock;
 	static const clock::time_point t_start = clock::now();
 	static clock::time_point t_last = t_start;
 	const clock::time_point now = clock::now();
-	const double total = std::chrono::duration<double>(now - t_start).count();
-	const double lap = std::chrono::duration<double>(now - t_last).count();
+	const double total = chrono::duration<double>(now - t_start).count();
+	const double lap = chrono::duration<double>(now - t_last).count();
 	t_last = now;
 
-	const std::time_t wall = std::time(nullptr);
+	const time_t wall = time(nullptr);
 	char buf[16];
-	std::strftime(buf, sizeof buf, "%H:%M:%S", std::localtime(&wall));
+	strftime(buf, sizeof buf, "%H:%M:%S", localtime(&wall));
 
-	std::ostringstream os;
-	os << '[' << buf << " | " << std::fixed << std::setprecision(1) << total << "s total | +" << lap << "s] " << msg << '\n';
-	std::cerr << os.str();
+	ostringstream os;
+	os << '[' << buf << " | " << fixed << setprecision(1) << total << "s total | +" << lap << "s] " << msg << '\n';
+	cerr << os.str();
 }
 
 // usage: ./sieve [factor base bound] [sieve half-width A] [max b] < n
@@ -45,7 +44,7 @@ static void stamp(const std::string& msg)
 //              GNFS_NONMONIC=1            allow non-monic polynomials
 //              GNFS_LP=L                  large prime bound per side (default 30*bound, 0 = no large primes)
 //              GNFS_DUMP_PREFIX=p         dump the state (p.rels) and the matrix (p.mat) for finish / postprocess
-// the planner still assumes no large primes, so its line count is pessimistic when they are on
+// the planner models the large primes (full relations + cycles of the large-prime graph); GNFS_LP is passed to it as a fixed bound
 int main(int argc, char** argv)
 {
 	bigint n;
@@ -56,16 +55,24 @@ int main(int argc, char** argv)
 	const char* env_deg = getenv("GNFS_DEGREE");
 	const char* env_lp = getenv("GNFS_LP");
 	const unsigned forced_deg = env_deg ? (unsigned)atoi(env_deg) : 0;
-	const bool do_select = env_poly ? std::string(env_poly) == "select" : msb(n) + 1 >= 108;
+	const bool do_select = env_poly ? string(env_poly) == "select" : msb(n) + 1 >= 108;
 	const gnfs_poly P = do_select ? select_polynomial(n, forced_deg, true, env_poly != nullptr) : make_gnfs_poly(n, forced_deg);
 
-	const bool plan_only = argc > 1 && std::string(argv[1]) == "plan";
+	const bool plan_only = argc > 1 && string(argv[1]) == "plan";
 	if (plan_only) argc = 1;
 
 	const bool bound_given = argc > 1;
 	const bool A_given = argc > 2;
 	const bool bmax_given = argc > 3;
 	const long EXCESS = 64; // rows beyond the column count needed before linear algebra
+	const int64_t MAX_A = 200000000; // sieve memory cap handed to the planner (about 12 bytes per position)
+
+	planner::lp_opt lp; // large prime bound per side: lp.mult * bound, or the fixed GNFS_LP
+	if (env_lp)
+	{
+		lp.mult = 0;
+		lp.abs = strtoull(env_lp, nullptr, 10); // 0 = no large primes
+	}
 	const bool use_planner = !A_given && (plan_only || msb(n) + 1 >= 108);
 
 	stamp("polynomial selection finished");
@@ -74,19 +81,22 @@ int main(int argc, char** argv)
 	uint64_t bound = bound_given ? strtoull(argv[1], nullptr, 10) : choose_bound(n);
 	int64_t plan_A = 0;
 	uint64_t plan_b_max = 0;
+	uint64_t plan_lines = 0; // predicted number of lines of the plan in use, for the calibration line at the end
 
 	if (use_planner)
 	{
-		const planner::plan_t plan = planner::plan_parameters(P.f, P.m, 200);
+		const planner::plan_t plan = planner::plan_parameters(P.f, P.m, 200, MAX_A, lp);
 		if (plan.feasible)
 		{
 			bound = plan.bound;
 			plan_A = plan.A;
 			plan_b_max = plan.b_max;
-			cerr << "plan: bound " << plan.bound << ", A = " << plan.A << ", about " << plan.lines << " lines for ~" << (uint64_t)plan.needed << " relations, "
-			     << (uint64_t)plan.ncols << " columns; predicted ~" << (uint64_t)plan.seconds << " s on a machine like the reference (sieve memory ~"
+			plan_lines = plan.lines;
+			cerr << "plan: bound " << plan.bound << ", A = " << plan.A << ", large prime bound " << (uint64_t)lp.bound((double)plan.bound) << ", about " << plan.lines
+			     << " lines for ~" << (uint64_t)plan.needed << " relations (" << (uint64_t)plan.full << " full + " << (uint64_t)plan.cycles << " cycles from "
+			     << (uint64_t)plan.partial << " partials), " << (uint64_t)plan.ncols << " columns; predicted ~" << (uint64_t)plan.seconds << " s on a machine like the reference (sieve memory ~"
 			     << (uint64_t)((2.0 * plan.A + 1) * 12 / 1e6) << " MB)\n";
-			if (plan.seconds > 3600) cerr << "warning: that is " << plan.seconds / 3600 << " hours; this implementation (base-m polynomial, one thread) is far from the state of the art at this size\n";
+			if (plan.seconds > 3600) cerr << "warning: that is " << plan.seconds / 3600 << " hours; this implementation (base-m polynomial) is far from the state of the art at this size\n";
 		}
 		else
 			cerr << "plan: no bound reaches enough relations within " << planner::B_CAP_LINES << " lines for this polynomial; trying the formula bound " << bound << " anyway\n";
@@ -115,27 +125,28 @@ int main(int argc, char** argv)
 			bound = (uint64_t)(bound * 1.3) + 1; // retry with a 30% larger bound
 			if (use_planner)
 			{
-				const planner::plan_t plan = planner::plan_for_bound(P.f, P.m, (double)bound);
+				const planner::plan_t plan = planner::plan_for_bound(P.f, P.m, (double)bound, MAX_A, lp);
 				plan_A = plan.feasible ? plan.A : 0;
 				plan_b_max = plan.feasible ? plan.b_max : 0;
+				plan_lines = plan.feasible ? plan.lines : 0;
 			}
 		}
 
-		fb = make_factor_bases(P.f, P.m, bound, bound, choose_num_qc(n));
+		fb = make_factor_bases(n, P.f, P.m, bound, bound, choose_num_qc(n));
 		ncols = num_columns(fb);
-		stamp("building factor bases (attempt " + std::to_string(attempt + 1) + ")");
+		stamp("building factor bases (attempt " + to_string(attempt + 1) + ")");
 		cerr << "bound " << bound << ": base sizes " << fb.rational.size() << " / " << fb.algebraic.size() << " / " << fb.quadratic.size() << '\n';
 
 		sieve_params sp;
 		if (A_given) sp.A = strtoll(argv[2], nullptr, 10); else if (plan_A) sp.A = plan_A;
 		if (bmax_given) sp.b_max = strtoull(argv[3], nullptr, 10); else if (plan_b_max) sp.b_max = plan_b_max;
-		sp.lp_bound = env_lp ? strtoull(env_lp, nullptr, 10) : 30 * bound;
+		sp.lp_bound = (uint64_t)lp.bound((double)bound);
 		const uint64_t b_limit = sp.b_max ? sp.b_max : DEFAULT_B_MAX;
 
 		rels.clear();
 		partials.clear(); // relations of an earlier attempt belong to another factor base
 		uint64_t next_b = 1;
-		sp.target = (size_t)(0.93 * ncols) + 64; // full relations + cycles together must reach this
+		sp.target = (size_t)(planner::TARGET_PER_COLUMN * ncols + planner::TARGET_EXTRA); // full relations + cycles together must reach this (same target as the planner)
 
 		for (;;)
 		{
@@ -146,7 +157,14 @@ int main(int argc, char** argv)
 			const long excess = (long)F.B.nrows - (long)F.B.ncols;
 			cerr << rels.size() << " full + " << partials.size() << " partial relations -> " << mat.size() << " rows; after filtering "
 			     << F.B.nrows << " rows x " << F.B.ncols << " columns (excess " << excess << ")\n";
-			if (excess >= EXCESS) { have_matrix = true; stamp("relation finding finished (matrix built)"); break; }
+			if (excess >= EXCESS)
+			{
+				have_matrix = true;
+				stamp("relation finding finished (matrix built)");
+				if (plan_lines) cerr << "calibration: planner predicted " << plan_lines << " lines, sieve used " << next_b - 1 << " ("
+				                     << rels.size() << " full + " << partials.size() << " partial, " << mat.size() - rels.size() << " cycles)\n";
+				break;
+			}
 			if (next_b > b_limit) break; // b range exhausted
 			sp.target = mat.size() + (size_t)(1.5 * (EXCESS - excess)) + ncols / 50 + 50; // each new full relation or cycle adds ~1 to the excess
 		}
@@ -170,8 +188,8 @@ int main(int argc, char** argv)
 	vector<nfs_relation> pool;
 	const size_t nfull = rels.size();
 	pool.reserve(nfull + partials.size());
-	for (nfs_relation& r : rels) pool.push_back(std::move(r));
-	for (nfs_relation& r : partials) pool.push_back(std::move(r));
+	for (nfs_relation& r : rels) pool.push_back(move(r));
+	for (nfs_relation& r : partials) pool.push_back(move(r));
 	vector<nfs_relation>().swap(rels);
 	vector<nfs_relation>().swap(partials);
 
@@ -206,13 +224,13 @@ int main(int argc, char** argv)
 	// returns true and prints n = p * q as soon as one gives a factor
 	auto try_all = [&](const vector<vector<size_t>>& deps_in, const char* name) {
 		vector<vector<size_t>> deps;
-		for (const auto& dep : deps_in) { vector<size_t> e = expand(dep); if (!e.empty()) deps.push_back(std::move(e)); }
-		std::sort(deps.begin(), deps.end());
-		deps.erase(std::unique(deps.begin(), deps.end()), deps.end());
+		for (const auto& dep : deps_in) { vector<size_t> e = expand(dep); if (!e.empty()) deps.push_back(move(e)); }
+		sort(deps.begin(), deps.end());
+		deps.erase(unique(deps.begin(), deps.end()), deps.end());
 		cerr << name << ": " << deps.size() << " distinct dependencies\n";
 		for (const auto& dep : deps)
 		{
-			stamp(std::string(name) + ": trying a dependency (square root step)");
+			stamp(string(name) + ": trying a dependency (square root step)");
 			bigint factor;
 			if (try_dependency(pool, dep, P.f, fb, P.m, n, factor))
 			{
@@ -225,7 +243,7 @@ int main(int argc, char** argv)
 
 	stamp("linear algebra: block Lanczos starting");
 	const auto lanczos_deps = lanczos_dependencies(F.B);
-	stamp("block Lanczos finished (" + std::to_string(lanczos_deps.size()) + " raw dependencies)");
+	stamp("block Lanczos finished (" + to_string(lanczos_deps.size()) + " raw dependencies)");
 	if (try_all(lanczos_deps, "block Lanczos")) { stamp("factoring finished"); return 0; }
 
 	if (F.B.ncols <= 40000) // dense elimination is only feasible for small matrices

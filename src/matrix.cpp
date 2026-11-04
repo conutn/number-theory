@@ -12,12 +12,12 @@ sparse_matrix build_matrix(const vector<nfs_relation>& rels, size_t ncols)
 	return B;
 }
 
-// build the matrix without rows that cannot be in any dependency (singleton removal, optionally surplus rows)
+// build matrix w/o rows that cannot be in any dependency (singleton, optionally surplus)
 // see matrix.hpp
 filtered_matrix filter_matrix(const vector<nfs_relation>& rels, size_t ncols, long keep_excess)
 {
 	vector<vector<uint32_t>> col_rows(ncols); // rows containing each column
-	vector<uint32_t> w(ncols, 0); // number of alive rows containing each column
+	vector<uint32_t> w(ncols, 0); // # of alive rows containing each column
 	for (size_t i = 0; i < rels.size(); ++i)
 		for (uint32_t c : rels[i].cols)
 		{
@@ -30,21 +30,21 @@ filtered_matrix filter_matrix(const vector<nfs_relation>& rels, size_t ncols, lo
 	for (size_t c = 0; c < ncols; ++c)
 		if (w[c] == 1) todo.push_back((uint32_t)c);
 
-	// drop the row of every weight-1 column until none is left
+	// drop row of every weight-1 column until none left
 	auto propagate = [&]()
 	{
 		while (!todo.empty())
 		{
 			const uint32_t c = todo.back();
 			todo.pop_back();
-			if (w[c] != 1) continue; // weight changed since it was queued
+			if (w[c] != 1) continue; // weight changed since queued
 			for (uint32_t i : col_rows[c])
 			{
 				if (!alive[i]) continue;
 				alive[i] = 0;
 				for (uint32_t c2 : rels[i].cols)
 					if (--w[c2] == 1) todo.push_back(c2);
-				break; // the one alive row of c
+				break; // one alive row of c
 			}
 		}
 	};
@@ -61,8 +61,8 @@ filtered_matrix filter_matrix(const vector<nfs_relation>& rels, size_t ncols, lo
 		const long excess = (long)rows.size() - (long)cols;
 		if (excess <= keep_excess) break;
 
-		const size_t kill = (size_t)std::max<long>(1, (excess - keep_excess) / 2); // half the excess per round
-		std::sort(rows.begin(), rows.end(), [&](uint32_t x, uint32_t y)
+		const size_t kill = (size_t)std::max<long>(1, (excess - keep_excess) / 2); // half excess per round
+		sort(rows.begin(), rows.end(), [&](uint32_t x, uint32_t y)
 		{
 			return rels[x].cols.size() != rels[y].cols.size() ? rels[x].cols.size() > rels[y].cols.size() : x < y; // heaviest first
 		});
@@ -75,7 +75,7 @@ filtered_matrix filter_matrix(const vector<nfs_relation>& rels, size_t ncols, lo
 		propagate();
 	}
 
-	// renumber the surviving columns
+	// renumber surviving columns
 	vector<int64_t> newcol(ncols, -1);
 	filtered_matrix F;
 	for (size_t c = 0; c < ncols; ++c)
@@ -85,7 +85,7 @@ filtered_matrix filter_matrix(const vector<nfs_relation>& rels, size_t ncols, lo
 		if (!alive[i]) continue;
 		vector<uint32_t> row;
 		for (uint32_t c : rels[i].cols) row.push_back((uint32_t)newcol[c]);
-		F.B.rows.push_back(std::move(row));
+		F.B.rows.push_back(move(row));
 		F.row_map.push_back(i);
 	}
 	F.B.nrows = F.B.rows.size();

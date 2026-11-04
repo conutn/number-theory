@@ -1,10 +1,10 @@
 #pragma once
-// small number theory helpers: modular arithmetic, 64-bit mulmod/powmod, Jacobi symbol, integer roots, prime generation
+// number theory helpers: modular arithmetic, 64-bit mulmod/powmod, Jacobi symbol, integer roots, prime generation
 
 #include "common.hpp"
 
 // generate primes up to lim (inclusive)
-template <typename T = uint64_t> // using bigint is much slower and unnecessary most of the time
+template <typename T = uint64_t> // bigint is unnecessary most of the time
 static vector<T> gen_prime(uint64_t lim)
 {
 	vector<T> primes;
@@ -23,7 +23,7 @@ static vector<T> gen_prime(uint64_t lim)
 
 		// mask out from p^2 to lim
 		if (p <= lim / p) // avoids overflow in p*p
-			for (uint64_t k = (p * p) / 2; k <= half; k += p) composite[k] = true; // stepping p in index = stepping 2p in value
+			for (uint64_t k = (p * p) / 2; k <= half; k += p) composite[k] = true; // stepping p in index => stepping 2p in value
 	}
 
 	return primes;
@@ -45,13 +45,13 @@ double log_cpp(const bigint& x);
 
 // a+b*r mod p
 // requires:
-//  b>=0
-//  p<2^32
+//   b>=0
+//   p<2^32
 uint64_t lin_mod(int64_t a, uint64_t b, uint64_t p, uint64_t r);
 
 // Jacobi symbol (a/n)
 // requires:
-//  n odd & positive
+//   n odd & positive
 // note: equal to Legendre symbol if n is prime
 int jacobi(uint64_t a, uint64_t n);
 

@@ -1,31 +1,31 @@
-// factor bases (rational, algebraic incl. projective roots, quadratic characters), bound heuristics, norms
+// factor bases (rational, algebraic w/ projective roots, quadratic characters), bound heuristics, norms
 
 #include "factor_base.hpp"
 #include "numtheory.hpp"
 #include "polymod.hpp"
 
-// returns smoothness bound from the size of n
+// smoothness bound from n
 uint64_t choose_bound(const bigint& n)
 {
-	// ln(bound) = 0.87 * (ln n)^(1/3) (ln ln n)^(2/3) + 0.7, L[1/3] shape fitted to degree-3 runs on 12..32 digit semiprimes (A = max(10000, 4*bound))
-	// smallest bound with enough relations: ~800 (12-16 digits), ~3200 (20), ~6400 (24), ~12800 (28), ~25600 (32)
-	// the offset puts the result slightly above that threshold (fastest runs are at or one doubling above); main() doubles it if still too small
-	// NOT measured beyond ~32 digits: treat larger values as a starting point
-	const double ln = (double)(msb(n) + 1) * 0.693147; // ln n from bit length
-	const double lnln = std::log(ln);
-	const double b = std::exp(0.87 * std::cbrt(ln) * std::pow(lnln, 2.0 / 3.0) + 0.7);
+	// log bound = 0.87 * (log n)^1/3 (log log n)^2/3 + 0.7, empirical params
+	// bound w/ sufficient rels: ~800 (12-16 digits), ~3200 (20), ~6400 (24), ~12800 (28), ~25600 (32)
+	// offset puts result slightly above threshold, main() doubles if too small
+	// NOT measured beyond ~32 digits: larger values considered as starting point
+	const double ln = (double)(msb(n) + 1) * 0.693147; // log n
+	const double lnln = log(ln); // don't mix them up!
+	const double b = exp(0.87 * cbrt(ln) * pow(lnln, 2.0 / 3.0) + 0.7);
 
 	return (uint64_t)std::min(std::max(b, 200.0), 4.0e9);
 }
 
-// returns number of quadratic characters
+// # of quadratic char pairs
 size_t choose_num_qc(const bigint& n)
 {
 	return 20 + msb(n) / 8;
 }
 
-// build all three bases
-factor_bases make_factor_bases(const poly& f, const bigint& m, uint64_t rat_bound, uint64_t alg_bound, size_t num_qc)
+// build all three bases (see factor_base.hpp)
+factor_bases make_factor_bases(const bigint& n, const poly& f, const bigint& m, uint64_t rat_bound, uint64_t alg_bound, size_t num_qc)
 {
 	factor_bases fb;
 
@@ -39,8 +39,8 @@ factor_bases make_factor_bases(const poly& f, const bigint& m, uint64_t rat_boun
 	{
 		const bigint P = p;
 
-		if (reduce(f, P).data().empty())
-			throw runtime_error("make_factor_bases: " + to_string(p) + " divides every coefficient of f, so it divides n");
+		if (n % P == 0)
+			throw runtime_error("make_factor_bases: " + to_string(p) + " is a divisor of n");
 
 		if (lc % P == 0) fb.algebraic.push_back({ p, FB_PROJECTIVE }); // root at infinity
 
@@ -48,12 +48,12 @@ factor_bases make_factor_bases(const poly& f, const bigint& m, uint64_t rat_boun
 			fb.algebraic.push_back({ p, r.convert_to<uint64_t>() });
 	}
 
-	bigint q = std::max<uint64_t>(std::max(rat_bound, alg_bound), 2); // characters use primes above both bounds
+	bigint q = std::max<uint64_t>(std::max(rat_bound, alg_bound), 2); // quadratic chars use primes above both bounds
 	const bigint give_up = q + 100000000;
 
 	while (fb.quadratic.size() < num_qc)
 	{
-		if (++q > give_up) throw runtime_error("make_factor_bases: could not find enough quadratic-character primes");
+		if (++q > give_up) throw runtime_error("make_factor_bases: failed to find enough quadratic-char primes");
 		if (!miller_rabin_test(q, 25)) continue;
 
 		const poly fq = reduce(f, q);
@@ -96,7 +96,7 @@ bigint norm(poly f, bigint a, bigint b)
 	return res;
 }
 
-// number of matrix columns: sign + all bases (+ parity)
+// # of matrix columns: sign + all bases (+ parity)
 size_t num_columns(const factor_bases& fb)
 {
 	return 1 + fb.rational.size() + fb.algebraic.size() + fb.quadratic.size() + (fb.parity ? 1 : 0);

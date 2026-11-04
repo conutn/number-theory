@@ -34,7 +34,7 @@ static void print_stats(const sparse_matrix& B)
 
 	// a weight-2 column is an edge between two rows, every cycle of that graph is a set of columns summing to 0
 	vector<uint32_t> parent(nr);
-	std::iota(parent.begin(), parent.end(), 0);
+	iota(parent.begin(), parent.end(), 0);
 	auto find = [&](uint32_t x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }; // union-find with path halving
 	size_t edges = 0, cycles = 0;
 	for (size_t c = 0; c < nc; ++c)
@@ -46,10 +46,10 @@ static void print_stats(const sparse_matrix& B)
 		}
 
 	// two columns with the same support (weight >= 3) give e_j + e_j' in ker B
-	vector<std::pair<std::pair<uint64_t, uint64_t>, uint32_t>> keys;
+	vector<pair<pair<uint64_t, uint64_t>, uint32_t>> keys;
 	for (size_t c = 0; c < nc; ++c)
 		if (w[c] >= 3) keys.push_back({ { h1[c], h2[c] }, (uint32_t)c });
-	std::sort(keys.begin(), keys.end());
+	sort(keys.begin(), keys.end());
 	size_t dups = 0;
 	for (size_t i = 1; i < keys.size(); ++i)
 		if (keys[i].first == keys[i - 1].first) ++dups; // equal hashes taken as equal supports
@@ -77,12 +77,12 @@ int main(int argc, char** argv)
 {
 	bool raw = false, stats = false, reduce = false;
 	int solve = 0;
-	std::string out_path, reduced_path;
-	vector<std::string> args;
+	string out_path, reduced_path;
+	vector<string> args;
 	vector<int> order; // 1 = --stats, 2 = --reduce, in the order given, so that "--stats --reduce --stats" works
 	for (int i = 1; i < argc; ++i)
 	{
-		const std::string a = argv[i];
+		const string a = argv[i];
 		if (a == "--raw") raw = true;
 		else if (a == "--stats") { stats = true; order.push_back(1); }
 		else if (a == "--reduce") { reduce = true; order.push_back(2); }
@@ -97,7 +97,7 @@ int main(int argc, char** argv)
 		return 2;
 	}
 
-	const auto t0 = std::chrono::steady_clock::now();
+	const auto t0 = chrono::steady_clock::now();
 
 	filtered_matrix F;
 	if (!load_filtered(args[0], F)) { cerr << "cannot read matrix " << args[0] << '\n'; return 2; }
@@ -125,20 +125,20 @@ int main(int argc, char** argv)
 			vector<uint64_t> xy, vm;
 			if (!load_vectors(args[k], xy, vm)) { cerr << "cannot read vectors " << args[k] << '\n'; return 2; }
 			cerr << "--- " << args[k] << '\n';
-			for (bitvec& y : lanczos_kernel_vectors(F.B, xy, vm)) pool.push_back(std::move(y));
+			for (bitvec& y : lanczos_kernel_vectors(F.B, xy, vm)) pool.push_back(move(y));
 			deps = dependencies_from_pool(F.B, pool);
 			if (!deps.empty()) break; // enough already; drop the break to see the numbers for every file
 		}
 		if (args.size() < 2) return 0; // only --stats / --reduce
 	}
 
-	const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	const double secs = chrono::duration<double>(chrono::steady_clock::now() - t0).count();
 	cerr << deps.size() << " dependencies in " << secs << " s\n";
 	if (deps.empty()) return 1;
 
 	if (!out_path.empty())
 	{
-		std::ofstream out(out_path);
+		ofstream out(out_path);
 		for (const auto& d : deps)
 		{
 			for (size_t k = 0; k < d.size(); ++k) out << (k ? " " : "") << (raw ? d[k] : F.row_map[d[k]]);

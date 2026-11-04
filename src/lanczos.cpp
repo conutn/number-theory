@@ -1,4 +1,4 @@
-// linear algebra over F_2: block Lanczos on B*B^T and the dense fallback; both return dependencies among the rows
+// linear algebra over F_2: block Lanczos on BB^T + dense fallback, return dependencies among rows
 
 #include "lanczos.hpp"
 #include "dump.hpp"
@@ -23,7 +23,7 @@ static mat64 mat_xor(const mat64& A, const mat64& B)
 	return C;
 }
 
-// A with all columns outside mask cleared
+// A w/ columns outside mask cleared
 static mat64 mat_mask_cols(const mat64& A, uint64_t mask)
 {
 	mat64 C;
@@ -38,7 +38,7 @@ static bool mat_is_zero(const mat64& A)
 	return true;
 }
 
-// A*B
+// AB
 static mat64 mat_mul(const mat64& A, const mat64& B)
 {
 	mat64 C;
@@ -47,7 +47,7 @@ static mat64 mat_mul(const mat64& A, const mat64& B)
 		uint64_t x = A.r[i], acc = 0;
 		while (x)
 		{
-			acc ^= B.r[ctz64(x)]; // row i of C = XOR of the rows of B picked by the set bits of A.r[i]
+			acc ^= B.r[ctz64(x)]; // row i of C = XOR rows of B picked by bits of A.r[i]
 			x &= x - 1;
 		}
 		C.r[i] = acc;
@@ -64,14 +64,14 @@ static mat64 inner(const vector<uint64_t>& V, const vector<uint64_t>& U)
 		uint64_t x = V[i];
 		while (x)
 		{
-			R.r[ctz64(x)] ^= U[i]; // row j of R += U[i] for every set bit j of V[i]
+			R.r[ctz64(x)] ^= U[i]; // row j of R ^= U[i] for every bit j of V[i]
 			x &= x - 1;
 		}
 	}
 	return R;
 }
 
-// V*M (n x 64 times 64 x 64)
+// VM (n x 64 times 64 x 64)
 static vector<uint64_t> vec_mat(const vector<uint64_t>& V, const mat64& M)
 {
 	vector<uint64_t> out(V.size(), 0);
@@ -88,16 +88,16 @@ static vector<uint64_t> vec_mat(const vector<uint64_t>& V, const mat64& M)
 	return out;
 }
 
-// chooses a bit mask S of columns so that T[S,S] is invertible and maximal (rank T = |S|)
-// prefer: columns left out by the previous iteration, all of which must be in S
-// S, Winv: outputs, mask and (T[S,S])^-1 as a 64x64 matrix (zero outside S)
-// returns false if some preferred column could not be selected (breakdown)
+// choose bit mask S of columns s.t. T[S,S] is invertible + maximal (rank T = |S|)
+//   prefer: cols left out by prev iteration, all cols in prefer must be in S
+//   S, Winv: mask, (T[S,S])^-1 as 64x64 matrix (zero outside S)
+// return false if a preferred column could not be selected
 static bool select_cols(const mat64& T, uint64_t prefer, uint64_t& S, mat64& Winv)
 {
-	mat64 t = T; // Schur complement of T w.r.t. the pivots chosen so far
+	mat64 t = T; // Schur complement of T w.r.t. pivots chosen so far
 	S = 0;
 
-	// eliminate a single pivot p (t[p][p] = 1)
+	// eliminate pivot p (t[p][p] = 1)
 	auto pivot1 = [&](int p)
 	{
 		const uint64_t rp = t.r[p];
@@ -107,7 +107,7 @@ static bool select_cols(const mat64& T, uint64_t prefer, uint64_t& S, mat64& Win
 		S |= uint64_t(1) << p;
 	};
 
-	// eliminate the 2x2 block {p,q}, t[p][p] = 0, t[p][q] = 1, c = t[q][q] arbitrary; block inverse = [[c,1],[1,0]]
+	// eliminate 2x2 block {p,q}, t[p][p] = 0, t[p][q] = 1, c = t[q][q] arbitrary; block inverse = [[c,1],[1,0]]
 	auto pivot2 = [&](int p, int q)
 	{
 		const uint64_t rp = t.r[p], rq = t.r[q];
@@ -116,16 +116,16 @@ static bool select_cols(const mat64& T, uint64_t prefer, uint64_t& S, mat64& Win
 		{
 			if (r == p || r == q) continue;
 			const bool x = t.r[r] >> p & 1, y = t.r[r] >> q & 1;
-			if ((x && c) != y) t.r[r] ^= rp; // coefficient on row p: x*c + y
-			if (x) t.r[r] ^= rq;             // coefficient on row q: x
+			if ((x && c) != y) t.r[r] ^= rp; // coeff on row p: x*c + y
+			if (x) t.r[r] ^= rq;             // coeff on row q: x
 		}
 		t.r[p] = t.r[q] = 0;
 		S |= (uint64_t(1) << p) | (uint64_t(1) << q);
 	};
 
-	// phase 1: the preferred columns
-	// Gram entries between two of them vanish, so a preferred column k usually only enters S in a 2x2 block {k, j}
-	// where the partner j may be ANY unselected column; handle them before other pivots use up the partners
+	// phase 1: preferred cols
+	// Gram entries between two preferred cols vanish, so preferred col k usually only enters S in 2x2 block {k, j}
+	// handle these before other pivots use up partners
 	bool ok = true;
 	for (;;)
 	{
@@ -140,17 +140,17 @@ static bool select_cols(const mat64& T, uint64_t prefer, uint64_t& S, mat64& Win
 		}
 
 		const uint64_t row = t.r[k] & ~S & ~(uint64_t(1) << k);
-		if (!row) // k is in the radical: cannot be selected
+		if (!row) // k in radical, cannot be selected
 		{
 			ok = false;
 			prefer &= ~(uint64_t(1) << k);
 			continue;
 		}
-		const uint64_t both = row & todo; // partner: prefer one that must be selected anyway
+		const uint64_t both = row & todo; // prefer partner that must be selected
 		pivot2(k, ctz64(both ? both : row));
 	}
 
-	// phase 2: extend to a maximal S (diagonal pivots first, then pairs of zero-diagonal columns)
+	// phase 2: extend to maximal S (diagonal pivots, then pairs of zero-diagonal columns)
 	for (;;)
 	{
 		const uint64_t cand = ~S;
@@ -176,7 +176,7 @@ static bool select_cols(const mat64& T, uint64_t prefer, uint64_t& S, mat64& Win
 		pivot2(p, q);
 	}
 
-	// invert T[S,S] using Gauss-Jordan on [T[S,S]+I_(not S) | I]
+	// invert T[S,S] w/ Gauss-Jordan on [T[S,S]+I_(not S) | I]
 	mat64 a, inv = mat_identity();
 	for (int i = 0; i < 64; ++i) a.r[i] = (S >> i & 1) ? (T.r[i] & S) : (uint64_t(1) << i);
 
@@ -204,27 +204,26 @@ static bool select_cols(const mat64& T, uint64_t prefer, uint64_t& S, mat64& Win
 	return ok;
 }
 
-static int g_lanczos_status = 0; // 1 = converged, 2 = breakdown, 3 = iteration cap (for diagnostics)
-static size_t g_lanczos_iters = 0; // iteration count of the last run (for diagnostics)
+static int g_lanczos_status = 0; // 1 = converged, 2 = breakdown, 3 = iteration cap
+static size_t g_lanczos_iters = 0; // iteration count of the last run
 
 // block Lanczos for symmetric matrix A=BB^T
-// xy = X+Y and vm = last V are returned for post-processing
-// returns false if it did not converge (V_i^T A V_i never became 0 within a generous iteration cap)
-// a well conditioned matrix takes ~n/62 iterations; far more means the matrix is badly conditioned (filter it first)
-// or the random start was unlucky (try another seed)
+// xy = X+Y + vm = last V returned for post-processing
+// return false if no convergence (V_i^T A V_i nonzero for all generations < cap)
+// well-conditioned matrices take ~n/62 iterations; more => matrix badly conditioned (filter it) | unlucky seed
 static bool block_lanczos(const sparse_matrix& B, vector<uint64_t>& xy, vector<uint64_t>& vm, uint64_t seed)
 {
 	const size_t n = B.nrows;
-	std::mt19937_64 rng(seed);
+	mt19937_64 rng(seed);
 
 	vector<uint64_t> Y(n);
 	for (auto& y : Y) y = rng();
 
 	const vector<uint64_t> V0 = mul_A(B, Y);
 	vector<uint64_t> X(n, 0), v = V0, v1(n, 0), v2(n, 0); // v = V_i, v1 = V_{i-1}, v2 = V_{i-2}
-	mat64 Winv1, Winv2, VAV1, C1; // previous Winv_{i-1}, Winv_{i-2}, V_{i-1}^T A V_{i-1}, C_{i-1}
+	mat64 Winv1, Winv2, VAV1, C1; // prev Winv_{i-1}, Winv_{i-2}, V_{i-1}^T A V_{i-1}, C_{i-1}
 	const mat64 I = mat_identity();
-	uint64_t excluded = 0; // columns left out of S in the last iteration
+	uint64_t excluded = 0; // cols left out of S in last iteration
 	bool converged = false;
 	const size_t cap = std::min<size_t>(n + 64, 3 * (n / 60) + 200);
 
@@ -245,15 +244,15 @@ static bool block_lanczos(const sparse_matrix& B, vector<uint64_t>& xy, vector<u
 		mat64 Winv;
 		if (!select_cols(VAV, excluded, S, Winv))
 		{
-			cerr << "lanczos: breakdown at iteration " << it << " (preferred column not selectable)\n";
+			cerr << "lanczos: breakdown at iteration " << it << " (preferred col not selectable)\n";
 			g_lanczos_status = 2;
 			break;
 		}
-		// the columns left out last time must all be selected now, otherwise the recurrence is no longer valid
-		// (unlucky random start): give up so the caller can reseed
+		// cols left out last time must be selected, otherwise recurrence is not valid
+		// (unlucky random start): give up so caller can reseed
 		if (excluded & ~S)
 		{
-			cerr << "lanczos: breakdown at iteration " << it << " (excluded columns not all selected)\n";
+			cerr << "lanczos: breakdown at iteration " << it << " (excluded cols not selected)\n";
 			g_lanczos_status = 2;
 			break;
 		}
@@ -273,9 +272,9 @@ static bool block_lanczos(const sparse_matrix& B, vector<uint64_t>& xy, vector<u
 		const vector<uint64_t> t1 = vec_mat(v1, E), t2 = vec_mat(v2, F);
 		for (size_t i = 0; i < n; ++i) vn[i] ^= (Av[i] & S) ^ t1[i] ^ t2[i];
 
-		v2 = std::move(v1);
-		v1 = std::move(v);
-		v = std::move(vn);
+		v2 = move(v1);
+		v1 = move(v);
+		v = move(vn);
 		Winv2 = Winv1;
 		Winv1 = Winv;
 		VAV1 = VAV;
@@ -285,14 +284,14 @@ static bool block_lanczos(const sparse_matrix& B, vector<uint64_t>& xy, vector<u
 
 	xy.resize(n);
 	for (size_t i = 0; i < n; ++i) xy[i] = X[i] ^ Y[i];
-	vm = std::move(v);
+	vm = move(v);
 
-	// a breakdown (status 2) is not fatal: whatever is returned is verified exactly (A z = 0, B^T x = 0)
-	// by lanczos_dependencies, it only limits how many dependencies come out
+	// breakdown is not fatal, return value is verified exactly (A z = 0, B^T x = 0)
+	// by lanczos_dependencies, only limits # of resulting dependencies
 	return converged || g_lanczos_status == 2;
 }
 
-// column j of n x 64 block as bit vector of length n
+// col j of n x 64 block as bit vector of length n
 static bitvec column_of(const vector<uint64_t>& V, int j)
 {
 	bitvec c((V.size() + 63) / 64, 0);
@@ -309,7 +308,7 @@ static bool bitvec_zero(const bitvec& a)
 }
 
 // all independent combinations c with XOR_{j in c} v[j] = 0
-// returns bit vectors over j
+// return bit vectors over j
 static vector<bitvec> dependencies(const vector<bitvec>& v)
 {
 	const size_t k = v.size(), kw = (k + 63) / 64;
@@ -338,14 +337,14 @@ static vector<bitvec> dependencies(const vector<bitvec>& v)
 				found = true;
 			}
 
-		if (found) basis.push_back({ std::move(x), std::move(tag), piv });
-		else out.push_back(std::move(tag)); // x reduced to 0: tag is a dependency
+		if (found) basis.push_back({ move(x), move(tag), piv });
+		else out.push_back(move(tag)); // x reduced to 0, tag is a dependency
 	}
 
 	return out;
 }
 
-// indices of the set bits among the first n
+// indices of set bits in first n
 static vector<size_t> bits_to_indices(const bitvec& a, size_t n)
 {
 	vector<size_t> idx;
@@ -354,7 +353,7 @@ static vector<size_t> bits_to_indices(const bitvec& a, size_t n)
 	return idx;
 }
 
-// XOR of the vectors v[j] for j in combo
+// XOR of vectors v[j] for j in combo
 static bitvec combine(const vector<bitvec>& v, const bitvec& combo, size_t len)
 {
 	bitvec r(len, 0);
@@ -364,7 +363,7 @@ static bitvec combine(const vector<bitvec>& v, const bitvec& combo, size_t len)
 	return r;
 }
 
-// indices of a maximal linearly independent subset of v (greedy, in order)
+// indices of maximal lin. indep. subset of v (greedy, in order)
 static vector<size_t> independent_indices(const vector<bitvec>& v)
 {
 	struct row { bitvec x; size_t pivot; };
@@ -381,7 +380,7 @@ static vector<size_t> independent_indices(const vector<bitvec>& v)
 			if (x[w])
 			{
 				const size_t piv = w * 64 + (size_t)ctz64(x[w]);
-				basis.push_back({ std::move(x), piv });
+				basis.push_back({ move(x), piv });
 				keep.push_back(j);
 				break;
 			}
@@ -389,7 +388,7 @@ static vector<size_t> independent_indices(const vector<bitvec>& v)
 	return keep;
 }
 
-// step 1: independent vectors y with A y = 0 (A = B B^T) from one Lanczos output (xy = X+Y, vm = last V)
+// step 1: indep. vectors y w/ A y = 0 (A = BB^T) from one Lanczos output
 vector<bitvec> lanczos_kernel_vectors(const sparse_matrix& B, const vector<uint64_t>& xy, const vector<uint64_t>& vm)
 {
 	const size_t n = B.nrows, nw = (n + 63) / 64;
@@ -399,7 +398,7 @@ vector<bitvec> lanczos_kernel_vectors(const sparse_matrix& B, const vector<uint6
 		return {};
 	}
 
-	vector<bitvec> Z, AZ; // nonzero columns of both blocks and their images under A
+	vector<bitvec> Z, AZ; // nonzero columns of both blocks and images under A
 	size_t nz_xy = 0, nz_vm = 0;
 	for (const auto* blk : { &xy, &vm })
 	{
@@ -409,18 +408,18 @@ vector<bitvec> lanczos_kernel_vectors(const sparse_matrix& B, const vector<uint6
 			bitvec z = column_of(*blk, j);
 			if (bitvec_zero(z)) continue;
 			(blk == &xy ? nz_xy : nz_vm)++;
-			Z.push_back(std::move(z));
+			Z.push_back(move(z));
 			AZ.push_back(column_of(Ablk, j));
 		}
 	}
 	cerr << "post: nonzero columns: " << nz_xy << " in X+Y, " << nz_vm << " in V (" << Z.size() << " total)\n";
 
-	const vector<bitvec> comb1 = dependencies(AZ); // combinations of columns with A z = 0
+	const vector<bitvec> comb1 = dependencies(AZ); // comb. of cols with A z = 0
 	vector<bitvec> ys;
 	for (const bitvec& c : comb1)
 	{
 		bitvec y = combine(Z, c, nw);
-		if (!bitvec_zero(y)) ys.push_back(std::move(y));
+		if (!bitvec_zero(y)) ys.push_back(move(y));
 	}
 	const size_t ys_raw = ys.size();
 	vector<bitvec> indep;
@@ -431,10 +430,8 @@ vector<bitvec> lanczos_kernel_vectors(const sparse_matrix& B, const vector<uint6
 	return indep;
 }
 
-// step 2: from a pool of vectors in ker A (may come from several Lanczos runs) find x in the span with B^T x = 0
-// B^T y lies in ker B for every y in ker A, so this works as soon as the pool has more independent vectors
-// than the images B^T y have rank
-// returns dependencies as lists of row indices of B
+// step 2: from pool of vectors in ker A, find x in span w/ B^T x = 0
+// return dependencies as lists of row indices of B
 vector<vector<size_t>> dependencies_from_pool(const sparse_matrix& B, const vector<bitvec>& pool)
 {
 	const size_t n = B.nrows, nw = (n + 63) / 64;
@@ -455,7 +452,7 @@ vector<vector<size_t>> dependencies_from_pool(const sparse_matrix& B, const vect
 	     << ys.size() - rank_ws << " dependencies\n";
 
 	vector<vector<size_t>> result;
-	for (const bitvec& c : dependencies(ws)) // combinations of the y with B^T x = 0
+	for (const bitvec& c : dependencies(ws)) // comb. of y with B^T x = 0
 	{
 		const bitvec x = combine(ys, c, nw);
 		if (bitvec_zero(x)) continue;
@@ -470,19 +467,18 @@ vector<vector<size_t>> dependencies_from_pool(const sparse_matrix& B, const vect
 	return result;
 }
 
-// steps 1 and 2 for one Lanczos output on its own
+// step 1 + 2 for one Lanczos output
 vector<vector<size_t>> postprocess_lanczos(const sparse_matrix& B, const vector<uint64_t>& xy, const vector<uint64_t>& vm)
 {
 	return dependencies_from_pool(B, lanczos_kernel_vectors(B, xy, vm));
 }
 
-// dependencies among rows of B (x with x^TB=0) by block Lanczos on BB^T
-// returns lists of row indices, all linearly independent
-// tries a few random starts if Lanczos does not converge
+// dependencies in rows of B (x with x^TB=0) by block Lanczos on BB^T
+// return lists of row indices
 vector<vector<size_t>> lanczos_dependencies(const sparse_matrix& B, uint64_t seed, int max_attempts)
 {
 	const char* dump_prefix = getenv("GNFS_DUMP_PREFIX"); // e.g. GNFS_DUMP_PREFIX=run1 -> run1.vec0, run1.vec1, ...
-	vector<bitvec> pool; // kernel vectors of A from all attempts so far
+	vector<bitvec> pool; // kernel vectors of A from attempts so far
 
 	for (int attempt = 0; attempt < max_attempts; ++attempt)
 	{
@@ -490,8 +486,7 @@ vector<vector<size_t>> lanczos_dependencies(const sparse_matrix& B, uint64_t see
 		const bool ok = block_lanczos(B, xy, vm, seed + 7919 * attempt);
 		cerr << "lanczos: status " << g_lanczos_status << " (1 converged, 2 breakdown, 3 iteration cap) after " << g_lanczos_iters << " iterations\n";
 
-		// dump before anything else can go wrong, whatever the status was
-		if (dump_prefix) save_vectors(std::string(dump_prefix) + ".vec" + std::to_string(attempt), xy, vm);
+		if (dump_prefix) save_vectors(string(dump_prefix) + ".vec" + to_string(attempt), xy, vm);
 
 		if (!ok)
 		{
@@ -499,8 +494,8 @@ vector<vector<size_t>> lanczos_dependencies(const sparse_matrix& B, uint64_t see
 			continue;
 		}
 
-		// every attempt adds a new random slice of ker A; the dependencies come from the union of the slices
-		for (bitvec& y : lanczos_kernel_vectors(B, xy, vm)) pool.push_back(std::move(y));
+		// every attempt adds new random slice of ker A; deps come from union of slices
+		for (bitvec& y : lanczos_kernel_vectors(B, xy, vm)) pool.push_back(move(y));
 		vector<vector<size_t>> result = dependencies_from_pool(B, pool);
 		if (!result.empty()) return result;
 	}
@@ -511,12 +506,12 @@ vector<vector<size_t>> lanczos_dependencies(const sparse_matrix& B, uint64_t see
 // Gaussian elimination fallback, same output
 vector<vector<size_t>> dense_dependencies(const sparse_matrix& B)
 {
-	vector<bitvec> rows; // rows of B as bit vectors over the columns
+	vector<bitvec> rows; // rows of B as bit vectors over cols
 	for (size_t i = 0; i < B.nrows; ++i)
 	{
 		bitvec r((B.ncols + 63) / 64, 0);
 		for (uint32_t c : B.rows[i]) r[c / 64] |= uint64_t(1) << (c % 64);
-		rows.push_back(std::move(r));
+		rows.push_back(move(r));
 	}
 
 	vector<vector<size_t>> result;

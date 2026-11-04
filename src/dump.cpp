@@ -1,16 +1,17 @@
-// binary checkpoint files for the filtered matrix and the Lanczos vectors
+// binary ckpt files for filtered matrix + Lanczos vectors
 
 #include "dump.hpp"
 
-// file type tags, checked on load
+// file type tags
 static const u64 MAGIC_MAT = 0x58544d41534e4647ULL;
 static const u64 MAGIC_VEC = 0x43455653474e4647ULL;
 
-// raw binary write / read of one value, get returns false on failure
+// binary write/read one value
 template <class T> static void put(ostream& o, const T& x) { o.write(reinterpret_cast<const char*>(&x), sizeof x); }
 template <class T> static bool get(istream& i, T& x) { i.read(reinterpret_cast<char*>(&x), sizeof x); return (bool)i; }
 
-// layout: magic, nrows, ncols, then per row (length, u32 column indices), then row_map (u64 per row)
+// layout of file:
+//   magic # <> nrows <> ncols <> for each row write (len, col idxs) <> row_map
 void save_filtered(const string& path, const filtered_matrix& F)
 {
 	ofstream o(path, ios::binary);
@@ -30,7 +31,7 @@ void save_filtered(const string& path, const filtered_matrix& F)
 	else cerr << "saved matrix " << F.B.nrows << " x " << F.B.ncols << " to " << path << '\n';
 }
 
-// reads the layout written by save_filtered, F is only valid if true is returned
+// read layout written by save_filtered, return true on success
 bool load_filtered(const string& path, filtered_matrix& F)
 {
 	ifstream in(path, ios::binary);
@@ -60,7 +61,8 @@ bool load_filtered(const string& path, filtered_matrix& F)
 	return true;
 }
 
-// layout: magic, size of xy, size of vm, then the entries of xy and vm (u64 each)
+// layout of file:
+//   magic # <> |xy| <> |vm| <> entries of xy + vm
 void save_vectors(const string& path, const vector<u64>& xy, const vector<u64>& vm)
 {
 	ofstream o(path, ios::binary);
@@ -75,7 +77,7 @@ void save_vectors(const string& path, const vector<u64>& xy, const vector<u64>& 
 	else cerr << "saved Lanczos vectors to " << path << '\n';
 }
 
-// reads the layout written by save_vectors, xy and vm are only valid if true is returned
+// read layout written by save_vectors, return true on success
 bool load_vectors(const string& path, vector<u64>& xy, vector<u64>& vm)
 {
 	ifstream in(path, ios::binary);

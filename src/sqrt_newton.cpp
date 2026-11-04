@@ -1,4 +1,4 @@
-// square root in Z[alpha] by p-adic Newton lifting (any degree; fallback for even degree)
+// square root in Z[alpha] by p-adic Newton lifting
 
 #include "sqrt_newton.hpp"
 #include "numtheory.hpp"
@@ -35,7 +35,7 @@ static poly mul_z(const poly& a, const poly& b, const poly& f)
 		for (size_t j = 0; j < B.size(); ++j)
 			c[i + j] += A[i] * B[j];
 
-	poly r(std::move(c));
+	poly r(move(c));
 	r.normalize();
 	rem_monic_z(r, f);
 	return r;
@@ -102,6 +102,65 @@ static bool field_sqrt(const poly& g, const poly& f, const bigint& p, poly& root
 	return true;
 }
 
+// returns f'^2 * prod(lc*a + b*alpha) over the dependency, mod f over Z
+// balanced product (a stack that merges equal sized products like a binary counter): the operands of every multiplication have about the same size,
+// so a fast big integer multiplication pays off, while a running product (one small factor at a time) costs time quadratic in the dependency size
+static poly dependency_product(const vector<nfs_relation>& rels, const vector<size_t>& dep, const poly& f, const poly& fd, const bigint& lc)
+{
+	vector<pair<poly, unsigned>> stack; // (product, level), a product of level l holds 2^l relations
+	for (size_t idx : dep)
+	{
+		const nfs_relation& r = rels[idx];
+		poly cur{ lc * bigint(r.a), bigint(r.b) };
+		unsigned level = 0;
+		while (!stack.empty() && stack.back().second == level)
+		{
+			cur = mul_z(stack.back().first, cur, f);
+			stack.pop_back();
+			++level;
+		}
+		stack.emplace_back(move(cur), level);
+	}
+
+	poly g = mul_z(fd, fd, f);
+	while (!stack.empty()) // levels decrease towards the top, so g stays about as large as the next factor
+	{
+		g = mul_z(g, stack.back().first, f);
+		stack.pop_back();
+	}
+	return g;
+}
+
+// sets y = sqrt(prod |a+b*m|) mod n from the factorizations stored with the relations, so the huge integer product is never built
+// returns false if the product is not a square (odd exponent or odd number of negative values)
+static bool rational_sqrt_mod_n(const vector<nfs_relation>& rels, const vector<size_t>& dep, const factor_bases& fb, const bigint& n, bigint& y)
+{
+	vector<long> acc(fb.rational.size(), 0); // exponent of every factor base prime
+	map<u64, long> lp; // exponent of every large prime
+	size_t negatives = 0;
+	for (size_t idx : dep)
+	{
+		const nfs_relation& r = rels[idx];
+		if (!r.cols.empty() && r.cols[0] == 0) ++negatives; // column 0 = sign
+		for (const fac_entry& fe : r.rfac) acc[fe.idx] += fe.e;
+		if (r.lp_r) ++lp[r.lp_r];
+	}
+	if (negatives & 1) return false;
+
+	y = 1;
+	for (size_t i = 0; i < acc.size(); ++i)
+	{
+		if (acc[i] & 1) return false;
+		if (acc[i]) y = y * powm(bigint(fb.rational[i].p), bigint(acc[i] / 2), n) % n;
+	}
+	for (const auto& kv : lp)
+	{
+		if (kv.second & 1) return false;
+		y = y * powm(bigint(kv.first), bigint(kv.second / 2), n) % n;
+	}
+	return true;
+}
+
 // sets beta with beta^2 = g in Z[x]/f
 // returns false if g is not square
 static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
@@ -132,14 +191,20 @@ static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
 	poly z = pow_mod(r, pow(p, (unsigned)d) - 2, reduce(f, p), p);
 	bigint M = p; // z is correct mod M, the precision doubles every step
 
+	size_t gbits = 0; // beta has about half as many bits as g: nothing to test before M is that large
+	for (const bigint& c : g.data()) gbits = std::max<size_t>(gbits, msb(c < 0 ? bigint(-c) : c) + 1);
+
 	for (int step = 0; step < 40; ++step)
 	{
-		// candidate beta = g z (symmetric residues mod M)
-		beta = mul_mod(reduce(g, M), z, f, M);
-		for (bigint& c : beta.data())
-			if (c > M / 2) c -= M;
-		beta.normalize();
-		if (mul_z(beta, beta, f).data() == g.data()) return true;
+		if (2 * (size_t)msb(M) + 64 >= gbits) // M is large enough for beta
+		{
+			// candidate beta = g z (symmetric residues mod M)
+			beta = mul_mod(reduce(g, M), z, f, M);
+			for (bigint& c : beta.data())
+				if (c > M / 2) c -= M;
+			beta.normalize();
+			if (mul_z(beta, beta, f).data() == g.data()) return true;
+		}
 
 		// lift to M^2: z <- z (3 - g z^2) / 2
 		const bigint M2 = M * M;
@@ -148,7 +213,7 @@ static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
 		vector<bigint> u(std::max<size_t>(t.size(), 1)); // u = 3 - t
 		for (size_t i = 0; i < t.size(); ++i) u[i] = modp(-t[i], M2);
 		u[0] = modp(u[0] + 3, M2);
-		poly up(std::move(u));
+		poly up(move(u));
 		up.normalize();
 
 		z = mul_mod(z, up, f, M2);
@@ -160,7 +225,7 @@ static bool poly_sqrt(const poly& g, const poly& f, poly& beta)
 	return false;
 }
 
-bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t>& dep, const poly& f0, const bigint& m, const bigint& n, bigint& factor)
+bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t>& dep, const poly& f0, const factor_bases& fb, const bigint& m, const bigint& n, bigint& factor)
 {
 	const bigint lc = f0.data().back();
 	if (lc != 1 && (dep.size() & 1)) return false;
@@ -170,20 +235,12 @@ bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t
 	for (size_t i = 1; i < f.size(); ++i) dv.push_back(f[i] * i);
 	const poly fd(dv); // f'
 
-	// gamma = f'^2 prod(lc*a + b*alpha), R = prod(a + b*m) on the rational side
-	poly g = mul_z(fd, fd, f);
-	bigint R = 1;
+	// rational side first, it is cheap: y0 = sqrt(prod(a + b*m)) mod n
+	bigint y0;
+	if (!rational_sqrt_mod_n(rels, dep, fb, n, y0)) return false; // rational side not a square
 
-	for (size_t idx : dep)
-	{
-		const nfs_relation& r = rels[idx];
-		g = mul_z(g, poly{ lc * bigint(r.a), bigint(r.b) }, f);
-		R *= bigint(r.a) + bigint(r.b) * m;
-	}
-
-	if (R <= 0) return false;
-	const bigint y0 = boost::multiprecision::sqrt(R);
-	if (y0 * y0 != R) return false; // rational side not a square
+	// gamma = f'^2 prod(lc*a + b*alpha)
+	const poly g = dependency_product(rels, dep, f, fd, lc);
 
 	poly beta;
 	if (!poly_sqrt(g, f, beta)) return false;
@@ -193,8 +250,8 @@ bool try_dependency_newton(const vector<nfs_relation>& rels, const vector<size_t
 	bigint x = 0, fdm = 0;
 	for (size_t i = beta.size(); i-- > 0;) x = modp(x * lcm + beta[i] % n, n);
 	for (size_t i = fd.size(); i-- > 0;) fdm = modp(fdm * lcm + fd[i], n);
-	bigint y = modp(y0 % n * fdm, n);
-	if (lc != 1) y = y * boost::multiprecision::powm(lc, bigint(dep.size() / 2), n) % n;
+	bigint y = modp(y0 * fdm, n);
+	if (lc != 1) y = y * powm(lc, bigint(dep.size() / 2), n) % n;
 
 	for (const bigint& c : { modp(x - y, n), modp(x + y, n) })
 	{

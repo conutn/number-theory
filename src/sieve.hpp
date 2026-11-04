@@ -1,5 +1,5 @@
 #pragma once
-// relation finding: line sieve on both sides, candidate factoring (trial or re-sieve), quadratic characters
+// relation finding: segmented multithreaded line sieve on both sides, candidate factoring, quadratic characters
 //
 // column format of the mod 2 matrix (one row per relation (a,b)):
 //  0               sign of a+b*m
@@ -40,7 +40,7 @@ struct sieve_params
 	size_t target = 0; // # of relations desired, 0 -> #columns+10
 	float slack = 1.0f; // fudge factor (natural log) for the rational side
 	float aslack = 3.0f; // same for the algebraic side (prime powers are not sieved there)
-	int cand_mode = 0; // how candidates are factored: 0 = choose per line, 1 = always test every base prime, 2 = always re-sieve
+	int cand_mode = 0; // no longer used: the divisors of a candidate are always collected inside the segment (kept so callers still compile)
 	uint64_t lp_bound = 0; // large prime bound on each side, 0 -> no large primes
 };
 

@@ -10,14 +10,14 @@ struct prod_tree
 	explicit prod_tree(vector<bigint> leaves)
 	{
 		if (leaves.empty()) leaves.push_back(1);
-		level.push_back(std::move(leaves));
+		level.push_back(move(leaves));
 		while (level.back().size() > 1)
 		{
 			const auto& cur = level.back();
 			vector<bigint> nxt;
 			for (size_t i = 0; i + 1 < cur.size(); i += 2) nxt.push_back(cur[i] * cur[i + 1]); // node value = product of children
 			if (cur.size() & 1) nxt.push_back(cur.back());
-			level.push_back(std::move(nxt));
+			level.push_back(move(nxt));
 		}
 	}
 
@@ -25,7 +25,7 @@ struct prod_tree
 };
 
 // return product of entries in v
-bigint balanced_product(vector<bigint> v) { return prod_tree(std::move(v)).root(); }
+bigint balanced_product(vector<bigint> v) { return prod_tree(move(v)).root(); }
 
 // returns value mod (leaf_i)^2 for every leaf
 static vector<bigint> rem_tree_sq(const bigint& value, const prod_tree& T)
@@ -37,7 +37,7 @@ static vector<bigint> rem_tree_sq(const bigint& value, const prod_tree& T)
 		vector<bigint> nxt(nodes.size());
 		// split each value into two branches
 		for (size_t i = 0; i < nodes.size(); ++i) nxt[i] = cur[i / 2] % (nodes[i] * nodes[i]);
-		cur = std::move(nxt);
+		cur = move(nxt);
 	}
 	return cur;
 }
@@ -82,7 +82,7 @@ vector<bigint> crt_tree(const vector<u64>& primes, const vector<vector<u64>>& re
 			vector<bigint> nxt;
 			for (size_t i = 0; i + 1 < cur.size(); i += 2) nxt.push_back(cur[i] * nodes[i + 1] + cur[i + 1] * nodes[i]); // tree recurrence, sum = sum_l*c_r + sum_r*c_l
 			if (cur.size() & 1) nxt.push_back(cur.back());
-			cur = std::move(nxt);
+			cur = move(nxt);
 		}
 
 		// put x in [-P/2,P/2]
